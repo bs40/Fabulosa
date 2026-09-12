@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{9D6B37C7-D1A5-48C6-9D6E-FA4B709C273C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fabulosa", "src\Fabulosa\Fabulosa.csproj", "{5A886113-540B-49E8-8C16-DC029F348895}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{567253C9-7AA5-410E-9DC6-EEF9C54FA0CA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestMusic", "tools\TestMusic\TestMusic.csproj", "{3AAC3378-708D-479C-9C39-2D40156F8630}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5A886113-540B-49E8-8C16-DC029F348895}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A886113-540B-49E8-8C16-DC029F348895}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A886113-540B-49E8-8C16-DC029F348895}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A886113-540B-49E8-8C16-DC029F348895}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3AAC3378-708D-479C-9C39-2D40156F8630}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3AAC3378-708D-479C-9C39-2D40156F8630}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3AAC3378-708D-479C-9C39-2D40156F8630}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3AAC3378-708D-479C-9C39-2D40156F8630}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5A886113-540B-49E8-8C16-DC029F348895} = {9D6B37C7-D1A5-48C6-9D6E-FA4B709C273C}
+		{3AAC3378-708D-479C-9C39-2D40156F8630} = {567253C9-7AA5-410E-9DC6-EEF9C54FA0CA}
+	EndGlobalSection
+EndGlobal
