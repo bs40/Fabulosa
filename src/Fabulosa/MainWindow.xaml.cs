@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -10,7 +11,6 @@ using Fabulosa.Audio;
 using Fabulosa.Media;
 using Fabulosa.Model;
 using Fabulosa.UI;
-using Microsoft.Win32;
 using SkiaSharp;
 using SkiaSharp.Views.Desktop;
 
@@ -31,6 +31,7 @@ namespace Fabulosa
         private bool _settingsDirty;
         private double _lastFrame;
         private bool _closing;
+        private float _pendingDt = 1f / 60f;
 
         public MainWindow()
         {
@@ -38,7 +39,6 @@ namespace Fabulosa
             Theme.Init();
 
             _settings = Storage.LoadSettings();
-            _state.Presets = Storage.LoadPresets();
             Storage.ApplySettings(_settings, _state);
 
             _capture = new AudioCapture(_buffer);
@@ -52,7 +52,6 @@ namespace Fabulosa
                 Media = _media,
                 Host = this,
                 PersistSettings = QueueSaveSettings,
-                PersistPresets = () => Storage.SavePresets(_state.Presets),
             };
             _renderer = new Renderer(_ctx);
 
@@ -95,7 +94,7 @@ namespace Fabulosa
                     {
                         CaptureWindowFromScreen(App.WindowShotPath);
                         File.WriteAllText(App.WindowShotPath + ".stats.txt",
-                            $"window={ActualWidth:0}x{ActualHeight:0} state={WindowState}\ncapture={_capture.Status} {_capture.DeviceName}\npeak_db={_analyzer.PeakDb:0.0}\nrms_db={_analyzer.RmsDb:0.0}\nsignal={_analyzer.SignalPresent}\n");
+                            $"window={ActualWidth:0}x{ActualHeight:0} state={WindowState}\ncapture={_capture.Status} {_capture.DeviceName}\npeak_db={_analyzer.PeakDb:0.0}\nrms_db={_analyzer.RmsDb:0.0}\nsignal={_analyzer.SignalPresent}\n" + BeatStats());
                     }
                     catch (Exception ex) { App.LogError(ex); }
                     if (string.IsNullOrEmpty(App.ScreenshotPath)) Close();
@@ -116,13 +115,19 @@ namespace Fabulosa
                         File.WriteAllText(App.ScreenshotPath + ".stats.txt",
                             $"fps={_renderer.Fps:0.0}\nrender_ms={_renderer.LastRenderMs:0.00}\ncapture={_capture.Status} {_capture.DeviceName} {_capture.FormatDescription}\n" +
                             $"peak_db={_analyzer.PeakDb:0.0}\nrms_db={_analyzer.RmsDb:0.0}\nvu_l={_analyzer.VuLeft:0.000}\nvu_r={_analyzer.VuRight:0.000}\nsignal={_analyzer.SignalPresent}\n" +
-                            $"media={_media.Snapshot.HasSession} {_media.Snapshot.Title}\n" + _renderer.ProfileReport());
+                            $"media={_media.Snapshot.HasSession} {_media.Snapshot.Title}\n" + BeatStats() + _renderer.ProfileReport());
                     }
                     catch (Exception ex) { App.LogError(ex); }
                     if (App.ExitAfterScreenshot) Close();
                 };
                 t.Start();
             }
+        }
+
+        private string BeatStats()
+        {
+            var b = _analyzer.Beat;
+            return $"bpm={b.Bpm:0.0}\nbeats={b.BeatCount}\nlocked={b.Locked}\nconfidence={b.Confidence:0.00}\n";
         }
 
         private void OnRendering(object sender, EventArgs e)
@@ -138,8 +143,6 @@ namespace Fabulosa
             _pendingDt = dt;
             Surface.InvalidateVisual();
         }
-
-        private float _pendingDt = 1f / 60f;
 
         private void OnPaintSurface(object sender, SKPaintSurfaceEventArgs e)
         {
@@ -281,73 +284,56 @@ namespace Fabulosa
 
         private void RunSelfTest(string reportPath)
         {
-            var sb = new System.Text.StringBuilder();
+            var sb = new StringBuilder();
             int pass = 0, fail = 0;
             void Check(string name, bool ok) { sb.AppendLine((ok ? "PASS " : "FAIL ") + name); if (ok) pass++; else fail++; }
             void Click(float x, float y, int clicks = 1) { _renderer.MouseDown(new SKPoint(x, y), clicks); _renderer.MouseUp(new SKPoint(x, y)); }
-            void Drag(float x0, float y0, float x1, float y1) { _renderer.MouseDown(new SKPoint(x0, y0), 1); _renderer.MouseMove(new SKPoint((x0 + x1) / 2, (y0 + y1) / 2)); _renderer.MouseMove(new SKPoint(x1, y1)); _renderer.MouseUp(new SKPoint(x1, y1)); }
 
             var savedPersist = _ctx.PersistSettings;
             _ctx.PersistSettings = () => { };
-            int initialPreset = _state.SelectedPreset;
             var initialChannel = _state.SpectrumChannel;
             bool initialPeakHold = _state.PeakHoldEnabled;
+            float initialSteps = _state.DancerStepsPerBeat;
             try
             {
-                // rendering pipeline is alive
                 Check("renderer produced frames", _renderer.Fps > 0 || _renderer.LastRenderMs > 0);
                 Check("audio capture running", _capture.IsRunning);
 
-                // presets list: click the third row
-                Click(100, 425 + 29 * 2 + 13);
-                Check("preset row click selects preset 3", _state.SelectedPreset == 2);
-                Check("preset applied its EQ", Math.Abs(_state.EqGains[0] - _state.Presets[2].EqGains[0]) < 0.01f);
-
-                // EQ cap drag: band 0 to +9 dB
-                float y0 = 725f - _state.EqGains[0] * (140f / 24f);
-                Drag(310, y0, 310, 725f - 9f * (140f / 24f));
-                Check("eq cap drag reaches +9 dB", Math.Abs(_state.EqGains[0] - 9f) < 0.3f);
-                Check("eq drag marks preset dirty", _state.EqDirty);
-                Click(310, 725f - 9f * (140f / 24f), 2);
-                Check("eq cap double-click resets to 0", Math.Abs(_state.EqGains[0]) < 0.01f);
-                _renderer.Wheel(new SKPoint(355, 725), 120);
-                Check("eq wheel nudges +0.5 dB", Math.Abs(_state.EqGains[1] - (_state.Presets[2].EqGains[1] + 0.5f)) < 0.01f);
-
-                // effect toggle (DELAY)
-                bool delayBefore = _state.Effects[2];
-                Click(1260, 640 + 33.5f * 2 + 13);
-                Check("effect button toggles", _state.Effects[2] != delayBefore);
-
-                // knob drag (Loudness up 80 px = +0.5)
-                float l0 = _state.Loudness;
-                Drag(1430, 668, 1430, 588);
-                Check("knob drag raises loudness", _state.Loudness > l0 + 0.3f);
-                Click(1430, 668, 2);
-                Check("knob double-click resets", Math.Abs(_state.Loudness - 0.5f) < 0.01f);
-
-                // spectrum channel toggle
                 Click(1060, 129);
                 Check("spectrum L+R label cycles channel", _state.SpectrumChannel != initialChannel);
 
-                // menu: open Visualisation, click Peak Hold
+                // Visualisation menu: "Peak Hold" is the fourth row (three items, then a separator)
                 Click(230, 72);
                 Check("menu opens", _renderer.IsMenuOpen);
-                float itemY = 93 + 4 + 26 * 3 + 9 + 13;
-                Click(250, itemY);
+                Click(250, 197);
                 Check("menu item toggles peak hold and closes menu", _state.PeakHoldEnabled != initialPeakHold && !_renderer.IsMenuOpen);
 
-                // title bar press starts a window drag, window buttons are hit
+                // "Dancer: 2 steps per beat" sits after Peak Hold, three releases, a separator, three FFT sizes, a separator, mesh lines and the 1-step item
+                Click(230, 72);
+                Click(250, 440);
+                Check("menu sets dancer to 2 steps per beat", Math.Abs(_state.DancerStepsPerBeat - 2f) < 0.01f && !_renderer.IsMenuOpen);
+
                 bool drag = _renderer.MouseDown(new SKPoint(700, 30), 1);
                 _renderer.MouseUp(new SKPoint(700, 30));
                 Check("title bar press requests window drag", drag);
-                bool overButton = _renderer.MouseDown(new SKPoint(1000, 128), 1);
+                bool overPanel = _renderer.MouseDown(new SKPoint(1000, 128), 1);
                 _renderer.MouseUp(new SKPoint(1000, 128));
-                Check("panel press does not drag the window", !overButton);
+                Check("panel press does not drag the window", !overPanel);
 
-                // screenshot round-trip
                 string png = reportPath + ".png";
                 _renderer.RenderToPng(png);
                 Check("offscreen render writes a PNG", File.Exists(png) && new FileInfo(png).Length > 100000);
+
+                var r128 = RunSyntheticTrack(128, 12);
+                sb.AppendLine($"  128 BPM track -> {r128.bpm:0.0} BPM, {r128.beats} beats, confidence {r128.conf:0.00}");
+                Check("beat tracker finds 128 BPM (+/- 2)", Math.Abs(r128.bpm - 128f) <= 2f);
+                Check("beat tracker emits about one beat per beat", r128.beats >= 20 && r128.beats <= 30);
+                var r90 = RunSyntheticTrack(90, 12);
+                sb.AppendLine($"  90 BPM track -> {r90.bpm:0.0} BPM, {r90.beats} beats, confidence {r90.conf:0.00}");
+                Check("beat tracker finds 90 BPM (+/- 2)", Math.Abs(r90.bpm - 90f) <= 2f);
+                Check("beat tracker keeps count at 90 BPM", r90.beats >= 14 && r90.beats <= 22);
+                var silent = RunSyntheticTrack(0, 6);
+                Check("silence produces no beats", silent.beats == 0 && silent.bpm == 0);
             }
             catch (Exception ex)
             {
@@ -359,10 +345,41 @@ namespace Fabulosa
                 _ctx.PersistSettings = savedPersist;
                 _state.SpectrumChannel = initialChannel;
                 _state.PeakHoldEnabled = initialPeakHold;
-                _state.SelectPreset(initialPreset);
+                _state.DancerStepsPerBeat = initialSteps;
             }
             sb.AppendLine($"{pass} passed, {fail} failed");
             File.WriteAllText(reportPath, sb.ToString());
+        }
+
+        /// <summary>Feeds a synthetic kick-on-every-beat track through a fresh tracker; bpm = 0 gives silence.</summary>
+        private static (float bpm, int beats, float conf) RunSyntheticTrack(double bpm, double seconds)
+        {
+            const int sr = 48000;
+            var bt = new BeatTracker();
+            bt.Reset(sr);
+            int n = (int)(seconds * sr);
+            var l = new float[4096];
+            var r = new float[4096];
+            double beatLen = bpm > 0 ? 60.0 / bpm : 0;
+            for (int start = 0; start < n; start += 4096)
+            {
+                int count = Math.Min(4096, n - start);
+                for (int i = 0; i < count; i++)
+                {
+                    float v = 0f;
+                    if (beatLen > 0)
+                    {
+                        double t = (start + i) / (double)sr;
+                        double tb = t % beatLen;
+                        double kick = Math.Sin(2 * Math.PI * (50 + 80 * Math.Exp(-tb * 30)) * tb) * Math.Exp(-tb * 12) * 0.8;
+                        double pad = 0.03 * Math.Sin(2 * Math.PI * 220 * t);
+                        v = (float)(kick + pad);
+                    }
+                    l[i] = v; r[i] = v;
+                }
+                bt.Process(l, r, 0, count);
+            }
+            return (bt.Bpm, bt.BeatCount, bt.Confidence);
         }
 
         // ---- persistence ------------------------------------------------------------------
@@ -429,7 +446,6 @@ namespace Fabulosa
             _closing = true;
             CompositionTarget.Rendering -= OnRendering;
             try { SaveSettingsNow(); } catch { }
-            try { Storage.SavePresets(_state.Presets); } catch { }
             _media.Dispose();
             _capture.Dispose();
             _renderer.Dispose();

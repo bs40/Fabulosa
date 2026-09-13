@@ -2,7 +2,7 @@ using SkiaSharp;
 
 namespace Fabulosa.UI
 {
-    /// <summary>Design-space geometry (1672 x 941), measured from the reference render.</summary>
+    /// <summary>Design-space geometry (1672 x 941). The top row and footer follow the reference render; the middle rows hold the dancer and scopes.</summary>
     public static class Layout
     {
         public const float Width = 1672f;
@@ -21,26 +21,21 @@ namespace Fabulosa.UI
         public static readonly SKRect Spectrum = new SKRect(326, 100, 1104, 374);
         public static readonly SKRect Meters = new SKRect(1114, 100, 1656, 374);
 
-        public static readonly SKRect Presets = new SKRect(16, 382, 235, 850);
-        public static readonly SKRect Scope = new SKRect(243, 382, 697, 590);
-        public static readonly SKRect Phase = new SKRect(705, 382, 1012, 590);
-        public static readonly SKRect Spectrum3D = new SKRect(1022, 382, 1656, 590);
-
-        public static readonly SKRect Equalizer = new SKRect(243, 598, 1170, 850);
-        public static readonly SKRect Effects = new SKRect(1178, 598, 1345, 850);
-        public static readonly SKRect Loudness = new SKRect(1355, 598, 1505, 722);
-        public static readonly SKRect Balance = new SKRect(1513, 598, 1656, 722);
-        public static readonly SKRect StereoWidth = new SKRect(1355, 730, 1505, 850);
-        public static readonly SKRect Master = new SKRect(1513, 730, 1656, 850);
+        public static readonly SKRect Dancer = new SKRect(16, 382, 350, 850);
+        public static readonly SKRect Scope = new SKRect(358, 382, 1656, 590);
+        public static readonly SKRect Spectrum3D = new SKRect(358, 598, 1300, 850);
+        public static readonly SKRect Phase = new SKRect(1308, 598, 1656, 850);
 
         public static readonly SKRect BottomBar = new SKRect(16, 858, 1656, 930);
-        public static readonly SKRect RetroBox = new SKRect(310, 872, 725, 918);
         public static readonly SKRect ShuffleBox = new SKRect(740, 872, 938, 918);
         public static readonly SKRect RepeatBox = new SKRect(955, 872, 1133, 918);
         public static readonly SKRect TickerBox = new SKRect(1148, 872, 1537, 918);
         public static readonly SKRect ClockBox = new SKRect(1552, 872, 1640, 918);
 
-        public static readonly string[] MenuTitles = { "File", "Playback", "Visualisation", "EQ", "Presets", "Tools", "Help" };
-        public static readonly float[] MenuX = { 30, 90, 187, 326, 380, 470, 541 };
+        public static readonly string[] MenuTitles = { "File", "Playback", "Visualisation", "Tools", "Help" };
+        public static readonly float[] MenuX = { 30, 90, 187, 326, 397 };
+
+        /// <summary>The inset display surface of a panel: 8 px at the sides and bottom, below the 32 px header.</summary>
+        public static SKRect ScreenOf(SKRect panel) => new SKRect(panel.Left + 8, panel.Top + 32, panel.Right - 8, panel.Bottom - 8);
     }
 }

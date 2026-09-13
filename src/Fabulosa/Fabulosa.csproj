@@ -12,7 +12,7 @@
     <RootNamespace>Fabulosa</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\Fabulosa.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
+    <Version>3.2.0</Version>
     <Authors>Fabulosa</Authors>
     <Product>Fabulosa</Product>
     <Description>Music-reactive visualiser for Windows</Description>
@@ -28,8 +28,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Assets\Fonts\Michroma-Regular.ttf" LogicalName="Fabulosa.Fonts.Michroma" />
-    <EmbeddedResource Include="Assets\Fonts\Yellowtail-Regular.ttf" LogicalName="Fabulosa.Fonts.Yellowtail" />
+    <!-- Artwork lives in the repository root so it can be swapped without touching the project. -->
+    <EmbeddedResource Include="..\..\wordmark.png" LogicalName="Fabulosa.Images.Wordmark" />
+    <EmbeddedResource Include="..\..\stickanim.png" LogicalName="Fabulosa.Images.StickAnim" />
   </ItemGroup>
 
 </Project>

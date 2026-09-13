@@ -41,7 +41,6 @@ namespace Fabulosa.UI
         public Action<string> SetStatus;
         public Action MarkStaticDirty;
         public Action PersistSettings;
-        public Action PersistPresets;
 
         public bool Hover(SKRect r) => !MenuOpen && r.Contains(Mouse);
     }

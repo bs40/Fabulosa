@@ -3,7 +3,7 @@ using SkiaSharp;
 
 namespace Fabulosa.UI.Views
 {
-    /// <summary>Outer brass frame, chassis, title bar (logo, tagline, window buttons) and the menu bar strip.</summary>
+    /// <summary>Outer brass frame, chassis, title bar (wordmark, tagline, window buttons) and the menu bar strip.</summary>
     public sealed class ChromeView : View
     {
         public int HoverMenu = -1;
@@ -11,6 +11,12 @@ namespace Fabulosa.UI.Views
         public float Fps;
         public float RenderMs;
         public readonly float[] MenuWidths = new float[Layout.MenuTitles.Length];
+
+        // The wordmark PNG (2172 x 724, chrome letters on black) is cropped to its glow; these are the letters' extents within that crop.
+        private static readonly SKRect WordmarkCrop = new SKRect(33, 120, 2172, 491);
+        private const float CoreLeft = 0.0252f, CoreRight = 0.9790f, CoreTop = 0.1051f, CoreBottom = 0.9515f;
+        private static SKImage _wordmark;
+        private static bool _wordmarkLoaded;
 
         public ChromeView() : base(Layout.Window)
         {
@@ -51,26 +57,32 @@ namespace Fabulosa.UI.Views
 
             DrawScrew(c, 11, 11); DrawScrew(c, 1661, 11); DrawScrew(c, 11, 930); DrawScrew(c, 1661, 930);
 
-            // logo
-            const float logoSize = 30f;
-            using (var lp = Theme.TextPaint(logoSize, SKColors.White, Theme.Logo))
-            {
-                Theme.Text(c, "FABULOSA", 33f, 42.6f, logoSize, new SKColor(0, 0, 0, 180), Theme.Logo, SKTextAlign.Left, 1.5f, lp);
-                lp.Shader = SKShader.CreateLinearGradient(new SKPoint(0, 17), new SKPoint(0, 42), new[] { new SKColor(0xf7, 0xef, 0xcd), new SKColor(0xd9, 0xca, 0x8f), new SKColor(0xa3, 0x91, 0x57) }, new[] { 0f, 0.55f, 1f }, SKShaderTileMode.Clamp);
-                float w = Theme.Text(c, "FABULOSA", 32f, 41f, logoSize, SKColors.White, Theme.Logo, SKTextAlign.Left, 1.5f, lp);
-                lp.Shader = null;
-                Theme.Text(c, "v1.0", 32f + w + 16f, 41f, 14f, new SKColor(0xcf, 0xc7, 0xa6), Theme.Sans);
-            }
+            DrawWordmark(c);
 
             Theme.Text(c, "HEAR MORE  ·  FEEL MORE", 836f, 36.5f, 13f, new SKColor(0xcb, 0xbf, 0x94), Theme.SansItalic, SKTextAlign.Center, 6.5f);
+        }
 
-            // pink script slogan
-            using (var glow = Theme.TextPaint(36f, Theme.Pink.WithAlpha(120), Theme.Script))
+        /// <summary>Chrome wordmark with its black background keyed out by a screen blend; letters 30 px tall on the bar's centre line.</summary>
+        private static void DrawWordmark(SKCanvas c)
+        {
+            if (!_wordmarkLoaded) { _wordmarkLoaded = true; _wordmark = Theme.LoadImage("Fabulosa.Images.Wordmark"); }
+            const float letterHeight = 30f, letterCentreY = 30.5f, letterLeft = 30f;
+            float versionX;
+            if (_wordmark != null)
             {
-                glow.MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 5f);
-                Theme.Text(c, "Music Never Gets Old", 1642f, 82f, 36f, Theme.Pink.WithAlpha(120), Theme.Script, SKTextAlign.Right, 0, glow);
+                float scale = letterHeight / ((CoreBottom - CoreTop) * WordmarkCrop.Height);
+                float dw = WordmarkCrop.Width * scale, dh = WordmarkCrop.Height * scale;
+                float top = letterCentreY - (CoreTop + CoreBottom) / 2f * dh;
+                float left = letterLeft - CoreLeft * dw;
+                using var p = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High, BlendMode = SKBlendMode.Screen };
+                c.DrawImage(_wordmark, WordmarkCrop, new SKRect(left, top, left + dw, top + dh), p);
+                versionX = left + CoreRight * dw + 14f;
             }
-            Theme.Text(c, "Music Never Gets Old", 1642f, 82f, 36f, Theme.Pink, Theme.Script, SKTextAlign.Right);
+            else
+            {
+                versionX = letterLeft + Theme.Text(c, "FABULOSA", letterLeft, 41f, 26f, new SKColor(0xf0, 0xd8, 0xf0), Theme.SansBold, SKTextAlign.Left, 2f) + 16f;
+            }
+            Theme.Text(c, "v3.2", versionX, 41f, 14f, new SKColor(0xcf, 0xc7, 0xa6), Theme.Sans);
         }
 
         private static void DrawScrew(SKCanvas c, float x, float y)

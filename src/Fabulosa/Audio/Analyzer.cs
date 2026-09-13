@@ -7,9 +7,9 @@ namespace Fabulosa.Audio
 
     /// <summary>
     /// Per-frame analysis of the captured audio: log-spaced band spectrum with smoothing and
-    /// peak hold, VU ballistics, peak/RMS meters, oscilloscope trace, phase-scope points and
-    /// the 3D waterfall history. Everything is computed on the UI thread from a snapshot
-    /// of the ring buffer, so views can read the arrays directly.
+    /// peak hold, VU ballistics, peak/RMS meters, oscilloscope trace, phase-scope points, the
+    /// 3D waterfall history and the beat tracker. Everything is computed on the UI thread from
+    /// a snapshot of the ring buffer, so views can read the arrays directly.
     /// </summary>
     public sealed class Analyzer
     {
@@ -38,6 +38,8 @@ namespace Fabulosa.Audio
         private long _lastTotalWritten;
         private float _peakHoldTimerL, _peakHoldTimerR;
         private float _phaseScale = 100f;
+        private float _vuVelL, _vuVelR;
+        private float _peakLinL, _peakLinR;
 
         public Analyzer(StereoRingBuffer buffer, AppState state)
         {
@@ -52,6 +54,7 @@ namespace Fabulosa.Audio
 
         public int SampleRate { get; set; } = 48000;
         public int FftSize { get; set; } = 8192;
+        public BeatTracker Beat { get; } = new BeatTracker();
 
         // ---- outputs -------------------------------------------------------------------
         /// <summary>Smoothed band levels in dB (MinDb..0+).</summary>
@@ -80,10 +83,6 @@ namespace Fabulosa.Audio
         public float PhaseEllipseB { get; private set; }
         public float PhaseEllipseAngle { get; private set; }
         public bool SignalPresent { get; private set; }
-        public float Loudness { get; private set; }
-
-        private float _vuVelL, _vuVelR;
-        private float _peakLinL, _peakLinR;
 
         public float BandCentreHz(int i) => _bandCentre[i];
 
@@ -113,16 +112,11 @@ namespace Fabulosa.Audio
             int freshFrames = (int)Math.Clamp(total - _lastTotalWritten, 0, need);
             _lastTotalWritten = total;
 
-            float gain = _state.MasterGainLinear;
-            float balance = _state.Balance; // -1..1
-            float gainL = gain * (balance > 0 ? 1f - balance * 0.75f : 1f);
-            float gainR = gain * (balance < 0 ? 1f + balance * 0.75f : 1f);
-            if (gain != 1f || balance != 0f)
-            {
-                for (int i = 0; i < need; i++) { _left[i] *= gainL; _right[i] *= gainR; }
-            }
+            // --- beat tracking consumes exactly the samples that arrived since the last frame ---
+            if (Beat.SampleRate != sr) Beat.Reset(sr);
+            if (freshFrames > 0) Beat.Process(_left, _right, need - freshFrames, freshFrames);
 
-            // --- meters (use the newest 300 ms / 50 ms) ---
+            // --- meters (use the newest 300 ms / 100 ms) ---
             int vuWindow = Math.Min(need, (int)(sr * 0.3f));
             int rmsWindow = Math.Min(need, (int)(sr * 0.1f));
             int peakWindow = Math.Max(Math.Min(need, freshFrames), Math.Min(need, sr / 50));
@@ -158,7 +152,6 @@ namespace Fabulosa.Audio
             PeakDbL = ToDb(_peakLinL);
             PeakDbR = ToDb(_peakLinR);
             SignalPresent = Math.Max(pkL, pkR) > 0.0005f;
-            Loudness = Math.Max(rmsL, rmsR);
 
             // --- spectrum ---
             var channel = _state.SpectrumChannel;
@@ -174,7 +167,6 @@ namespace Fabulosa.Audio
             int bins = n / 2;
             float attack = 1f - MathF.Exp(-dt / _state.SpectrumAttack);
             float release = _state.SpectrumReleaseDbPerSec * dt;
-            float displayGain = _state.LoudnessGainDb + DisplayOffsetDb;
             for (int b = 0; b < BandCount; b++)
             {
                 float lo = _bandLo[b] / binHz, hi = _bandHi[b] / binHz;
@@ -196,8 +188,7 @@ namespace Fabulosa.Audio
                     iHi = Math.Clamp(iHi, 1, bins - 1);
                     for (int i = iLo; i <= iHi; i++) p += _power[i];
                 }
-                float value = 10f * MathF.Log10(p + 1e-12f);
-                value += displayGain + _state.EqGainAt(_bandCentre[b]);
+                float value = 10f * MathF.Log10(p + 1e-12f) + DisplayOffsetDb;
                 if (value < MinDb) value = MinDb;
                 if (value > 6f) value = 6f;
 
@@ -244,21 +235,17 @@ namespace Fabulosa.Audio
                 Scope[p] = cnt > 0 ? acc / cnt : 0;
             }
 
-            // --- phase scope: newest samples, mid/side width applied ---
-            float width = _state.StereoWidth; // 0..2
+            // --- phase scope: newest samples, auto-ranged ---
             int phaseAvailable = Math.Min(need, PhasePoints);
-            int phaseStep = 1;
             float pkNow = Math.Max(pkL, pkR);
             float wantScale = pkNow > 0.002f ? Math.Clamp(0.9f / pkNow, 0.7f, 40f) : _phaseScale;
             _phaseScale += (wantScale - _phaseScale) * (wantScale < _phaseScale ? 0.25f : 0.03f);
             double sxx = 0, syy = 0, sxy = 0;
             int count = 0;
-            for (int i = need - phaseAvailable; i < need; i += phaseStep)
+            for (int i = need - phaseAvailable; i < need; i++)
             {
-                float l = _left[i], r = _right[i];
-                float mid = 0.5f * (l + r), side = 0.5f * (l - r) * width;
-                float x = (mid + side) * _phaseScale;
-                float y = (mid - side) * _phaseScale;
+                float x = _left[i] * _phaseScale;
+                float y = _right[i] * _phaseScale;
                 PhaseX[count] = x; PhaseY[count] = y;
                 sxx += x * x; syy += y * y; sxy += x * y;
                 count++;

@@ -28,6 +28,7 @@ namespace Fabulosa.UI
         private readonly Stopwatch _frameClock = new Stopwatch();
         private double _fpsAccum, _msAccum;
         private int _fpsFrames;
+        private double[] _profileMs;
 
         public FrameContext Ctx { get; }
 
@@ -41,24 +42,10 @@ namespace Fabulosa.UI
             _views.Add(new NowPlayingView());
             _views.Add(new SpectrumView());
             _views.Add(new LevelMetersView());
-            _views.Add(new PresetsView());
+            _views.Add(new DancerView());
             _views.Add(new OscilloscopeView());
             _views.Add(new PhaseScopeView());
             _views.Add(new Spectrum3DView());
-            _views.Add(new EqualizerView());
-            _views.Add(new EffectsView());
-            _views.Add(new KnobView(Layout.Loudness, "LOUDNESS", "MIN", "MAX",
-                new[] { new SKColor(0xff, 0x2a, 0x2a), new SKColor(0xff, 0xa0, 0x30), new SKColor(0xff, 0xd0, 0x40), new SKColor(0x30, 0xc0, 0xff), new SKColor(0x1a, 0x6c, 0xff) },
-                s => s.Loudness, (s, v) => s.Loudness = v, 0.5f));
-            _views.Add(new KnobView(Layout.Balance, "BALANCE", "L", "R",
-                new[] { new SKColor(0xff, 0x2a, 0x2a), new SKColor(0xff, 0x8a, 0x30), new SKColor(0xff, 0xb0, 0x30), new SKColor(0xff, 0xd0, 0x60), new SKColor(0xff, 0xa0, 0x30) },
-                s => (s.Balance + 1f) / 2f, (s, v) => s.Balance = v * 2f - 1f, 0.5f));
-            _views.Add(new KnobView(Layout.StereoWidth, "STEREO WIDTH", "NARROW", "WIDE",
-                new[] { new SKColor(0xff, 0x2a, 0x2a), new SKColor(0xff, 0x90, 0x30), new SKColor(0xff, 0xd0, 0x40), new SKColor(0x40, 0xb8, 0xff), new SKColor(0x1a, 0x70, 0xff) },
-                s => s.StereoWidth / 2f, (s, v) => s.StereoWidth = v * 2f, 0.5f));
-            _views.Add(new KnobView(Layout.Master, "MASTER", "-∞", "+6 dB",
-                new[] { new SKColor(0x1a, 0x6c, 0xff), new SKColor(0x30, 0xc0, 0xff), new SKColor(0xff, 0xd0, 0x40), new SKColor(0xff, 0x8a, 0x30), new SKColor(0xff, 0x2a, 0x2a) },
-                s => s.Master, (s, v) => s.Master = v, 0.8f, 30f));
             _views.Add(_bottomBar);
 
             ctx.SetStatus = msg => { _bottomBar.Status = msg; _bottomBar.StatusUntil = ctx.Time + 3f; };
@@ -153,7 +140,6 @@ namespace Fabulosa.UI
 
         /// <summary>When set, per-view draw times are tracked (exponential average) for <see cref="ProfileReport"/>.</summary>
         public bool Profile { get; set; }
-        private double[] _profileMs;
 
         public string ProfileReport()
         {
@@ -223,14 +209,12 @@ namespace Fabulosa.UI
             if (_menus.IsOpen)
             {
                 if (_menus.MouseDown(p, Ctx)) return false;
-                int t = HitMenuTitle(p);
                 _menus.Close();
-                if (t >= 0) return false; // clicking the open title closes it
                 return false;
             }
 
-            int title2 = HitMenuTitle(p);
-            if (title2 >= 0) { _menus.Open(title2, _chrome.MenuRect(title2), Ctx); return false; }
+            int title = HitMenuTitle(p);
+            if (title >= 0) { _menus.Open(title, _chrome.MenuRect(title), Ctx); return false; }
 
             if (Layout.BtnMinimize.Contains(p)) { Ctx.Host.Minimize(); return false; }
             if (Layout.BtnMaximize.Contains(p)) { Ctx.Host.ToggleMaximize(); return false; }
@@ -278,9 +262,6 @@ namespace Fabulosa.UI
             {
                 new Menu { Title = "File", Build = f => new List<MenuItem>
                 {
-                    new MenuItem { Label = "Import Presets…", Action = PresetsView.ImportPresets },
-                    new MenuItem { Label = "Export Selected Preset…", Action = PresetsView.ExportSelected },
-                    MenuItem.Separator(),
                     new MenuItem { Label = "Save Screenshot…", Action = SaveScreenshot },
                     MenuItem.Separator(),
                     new MenuItem { Label = "Exit", Action = ctx => ctx.Host.CloseWindow() },
@@ -314,19 +295,13 @@ namespace Fabulosa.UI
                     new MenuItem { Label = "FFT 16384 (fine)", Action = ctx => SetFft(ctx, 16384), Checked = ctx => ctx.State.FftSize == 16384 },
                     MenuItem.Separator(),
                     new MenuItem { Label = "3D Mesh Lines", Action = ctx => { ctx.State.MeshLines = !ctx.State.MeshLines; ctx.PersistSettings?.Invoke(); }, Checked = ctx => ctx.State.MeshLines },
+                    new MenuItem { Label = "Dancer: 1 step per beat", Action = ctx => SetDancerSteps(ctx, 1f), Checked = ctx => IsSteps(ctx, 1f) },
+                    new MenuItem { Label = "Dancer: 2 steps per beat", Action = ctx => SetDancerSteps(ctx, 2f), Checked = ctx => IsSteps(ctx, 2f) },
+                    new MenuItem { Label = "Dancer: 4 steps per beat", Action = ctx => SetDancerSteps(ctx, 4f), Checked = ctx => IsSteps(ctx, 4f) },
+                    new MenuItem { Label = "Dancer: 1 step per 2 beats", Action = ctx => SetDancerSteps(ctx, 0.5f), Checked = ctx => IsSteps(ctx, 0.5f) },
+                    MenuItem.Separator(),
                     new MenuItem { Label = "Show Frame Rate", Action = ctx => ctx.State.ShowFps = !ctx.State.ShowFps, Checked = ctx => ctx.State.ShowFps },
                 }},
-                new Menu { Title = "EQ", Build = f => new List<MenuItem>
-                {
-                    new MenuItem { Label = "Reset to Flat", Action = ctx => { ctx.State.ResetEq(); ctx.PersistSettings?.Invoke(); } },
-                    new MenuItem { Label = "Invert Curve", Action = ctx => { for (int i = 0; i < AppState.EqBandCount; i++) ctx.State.EqGains[i] = -ctx.State.EqGains[i]; ctx.State.EqDirty = true; ctx.PersistSettings?.Invoke(); } },
-                    new MenuItem { Label = "Smooth Curve", Action = SmoothEq },
-                    MenuItem.Separator(),
-                    new MenuItem { Label = "Bass Boost", Action = ctx => ApplyShape(ctx, new float[] { 8, 8, 7, 5, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }) },
-                    new MenuItem { Label = "Treble Boost", Action = ctx => ApplyShape(ctx, new float[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 6, 6 }) },
-                    new MenuItem { Label = "Loudness Curve", Action = ctx => ApplyShape(ctx, new float[] { 6, 6, 5, 3, 1, 0, -1, -2, -2, -1, 0, 1, 2, 3, 4, 4, 3 }) },
-                }},
-                new Menu { Title = "Presets", Build = BuildPresetsMenu },
                 new Menu { Title = "Tools", Build = f => new List<MenuItem>
                 {
                     new MenuItem { Label = "Always on Top", Action = ctx => { ctx.State.AlwaysOnTop = !ctx.State.AlwaysOnTop; ctx.Host.SetTopmost(ctx.State.AlwaysOnTop); ctx.PersistSettings?.Invoke(); }, Checked = ctx => ctx.State.AlwaysOnTop },
@@ -340,14 +315,12 @@ namespace Fabulosa.UI
                     new MenuItem { Label = "How It Works", Action = ctx => ctx.Host.ShowMessage("How Fabulosa works",
                         "Fabulosa listens to whatever Windows is playing (WASAPI loopback on the default output device) and visualises it.\n\n" +
                         "• Spectrum / 3D spectrum: 64 log-spaced bands, 20 Hz – 20 kHz. Click L+R to switch channels.\n" +
-                        "• VU meters: true 300 ms ballistics, 0 VU = -18 dBFS.\n" +
+                        "• VU meters: true 300 ms ballistics, 0 VU = -14 dBFS.\n" +
                         "• Oscilloscope: 5 ms/div, rising-edge triggered. Phase scope: X = left, Y = right.\n" +
-                        "• Now Playing and the transport buttons use the Windows media session of the app that is playing.\n\n" +
-                        "The equaliser, effects and knobs shape the visualisation (the app is not in the audio path):\n" +
-                        "EQ tilts the displayed spectrum, Loudness sets the display gain, Balance weights the meters,\n" +
-                        "Stereo Width scales the phase scope, Master is the analysis input gain.\n\n" +
-                        "Drag caps and knobs, scroll to nudge them, double-click to reset.") },
-                    new MenuItem { Label = "About Fabulosa", Action = ctx => ctx.Host.ShowMessage("Fabulosa", "Fabulosa v1.0\nMusic-reactive visualiser for Windows.\n\nSound. In colour.") },
+                        "• Dancer: a beat tracker follows the kick and snare, estimates the tempo and steps the figure\n" +
+                        "  to its next pose on every beat (Visualisation menu sets steps per beat).\n" +
+                        "• Now Playing and the transport buttons use the Windows media session of the app that is playing.") },
+                    new MenuItem { Label = "About Fabulosa", Action = ctx => ctx.Host.ShowMessage("Fabulosa", "Fabulosa v3.2\nMusic-reactive visualiser for Windows.") },
                 }},
             };
         }
@@ -363,46 +336,8 @@ namespace Fabulosa.UI
         private static void SetChannel(FrameContext ctx, SpectrumChannel ch) { ctx.State.SpectrumChannel = ch; ctx.PersistSettings?.Invoke(); }
         private static void SetRelease(FrameContext ctx, float v) { ctx.State.SpectrumReleaseDbPerSec = v; ctx.PersistSettings?.Invoke(); }
         private static void SetFft(FrameContext ctx, int n) { ctx.State.FftSize = n; ctx.Analyzer.FftSize = n; ctx.PersistSettings?.Invoke(); }
-
-        private static void SmoothEq(FrameContext ctx)
-        {
-            var g = ctx.State.EqGains;
-            var copy = (float[])g.Clone();
-            for (int i = 0; i < g.Length; i++)
-            {
-                float prev = copy[Math.Max(0, i - 1)], next = copy[Math.Min(g.Length - 1, i + 1)];
-                g[i] = MathF.Round((prev + 2 * copy[i] + next) / 4f * 4f) / 4f;
-            }
-            ctx.State.EqDirty = true;
-            ctx.PersistSettings?.Invoke();
-        }
-
-        private static void ApplyShape(FrameContext ctx, float[] shape)
-        {
-            Array.Copy(shape, ctx.State.EqGains, Math.Min(shape.Length, AppState.EqBandCount));
-            ctx.State.EqDirty = true;
-            ctx.PersistSettings?.Invoke();
-        }
-
-        private static List<MenuItem> BuildPresetsMenu(FrameContext f)
-        {
-            var items = new List<MenuItem>();
-            for (int i = 0; i < f.State.Presets.Count; i++)
-            {
-                int index = i;
-                items.Add(new MenuItem
-                {
-                    Label = $"{index + 1:00}  {f.State.Presets[index].Name}",
-                    Action = ctx => { ctx.State.SelectPreset(index); ctx.PersistSettings?.Invoke(); },
-                    Checked = ctx => ctx.State.SelectedPreset == index,
-                });
-            }
-            items.Add(MenuItem.Separator());
-            items.Add(new MenuItem { Label = "Save to Selected Preset", Action = PresetsView.SavePreset });
-            items.Add(new MenuItem { Label = "Save as New Preset…", Action = PresetsView.SaveAsNew });
-            items.Add(new MenuItem { Label = "Delete Selected Preset", Action = PresetsView.DeletePreset, Enabled = ctx => ctx.State.Presets.Count > 1 });
-            return items;
-        }
+        private static void SetDancerSteps(FrameContext ctx, float v) { ctx.State.DancerStepsPerBeat = v; ctx.PersistSettings?.Invoke(); }
+        private static bool IsSteps(FrameContext ctx, float v) => Math.Abs(ctx.State.DancerStepsPerBeat - v) < 0.01f;
 
         private static void SaveScreenshot(FrameContext ctx)
         {

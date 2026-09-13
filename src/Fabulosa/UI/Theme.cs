@@ -5,7 +5,7 @@ using SkiaSharp;
 
 namespace Fabulosa.UI
 {
-    /// <summary>Colours, typefaces and the small set of drawing primitives every panel is built from.</summary>
+    /// <summary>Colours, typefaces, embedded assets and the small set of drawing primitives every panel is built from.</summary>
     public static class Theme
     {
         // ---- palette (sampled from the reference render) ----
@@ -35,8 +35,6 @@ namespace Fabulosa.UI
         public static SKTypeface Sans { get; private set; }
         public static SKTypeface SansBold { get; private set; }
         public static SKTypeface SansItalic { get; private set; }
-        public static SKTypeface Logo { get; private set; }
-        public static SKTypeface Script { get; private set; }
 
         private static bool _initialised;
 
@@ -47,11 +45,10 @@ namespace Fabulosa.UI
             Sans = SKTypeface.FromFamilyName("Arial", SKFontStyleWeight.Normal, SKFontStyleWidth.Normal, SKFontStyleSlant.Upright) ?? SKTypeface.Default;
             SansBold = SKTypeface.FromFamilyName("Arial", SKFontStyleWeight.Bold, SKFontStyleWidth.Normal, SKFontStyleSlant.Upright) ?? Sans;
             SansItalic = SKTypeface.FromFamilyName("Arial", SKFontStyleWeight.Normal, SKFontStyleWidth.Normal, SKFontStyleSlant.Italic) ?? Sans;
-            Logo = LoadEmbedded("Fabulosa.Fonts.Michroma") ?? SansBold;
-            Script = LoadEmbedded("Fabulosa.Fonts.Yellowtail") ?? SansItalic;
         }
 
-        private static SKTypeface LoadEmbedded(string name)
+        // ---- embedded assets ----
+        public static byte[] LoadResource(string name)
         {
             try
             {
@@ -59,10 +56,21 @@ namespace Fabulosa.UI
                 if (stream == null) return null;
                 var ms = new MemoryStream();
                 stream.CopyTo(ms);
-                ms.Position = 0;
-                return SKTypeface.FromStream(ms);
+                return ms.ToArray();
             }
             catch { return null; }
+        }
+
+        public static SKImage LoadImage(string name)
+        {
+            var bytes = LoadResource(name);
+            return bytes == null ? null : SKImage.FromEncodedData(bytes);
+        }
+
+        public static SKBitmap LoadBitmap(string name)
+        {
+            var bytes = LoadResource(name);
+            return bytes == null ? null : SKBitmap.Decode(bytes);
         }
 
         // ---- text ----
@@ -231,7 +239,7 @@ namespace Fabulosa.UI
                 c.DrawRoundRect(SKRect.Inflate(r, -1f, -1f), radius - 1, radius - 1, edgeHi);
         }
 
-        /// <summary>Soft glow behind a shape: draws the given action with a blurred, translucent paint.</summary>
+        /// <summary>Soft glow: a blurred, translucent fill paint.</summary>
         public static SKPaint Glow(SKColor color, float sigma, byte alpha)
         {
             return new SKPaint

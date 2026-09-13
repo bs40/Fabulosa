@@ -7,3 +7,4 @@ publish/
 *.log
 *.stats.txt
 TestResults/
+Thumbs.db

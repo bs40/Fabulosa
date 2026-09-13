@@ -4,15 +4,15 @@ using SkiaSharp;
 
 namespace Fabulosa.UI.Views
 {
-    /// <summary>Waterfall: 40 time slices of the 64-band spectrum drawn as an oblique wireframe, coloured by level.</summary>
+    /// <summary>Waterfall: 32 time slices of the 64-band spectrum drawn as an oblique wireframe, coloured by level.</summary>
     public sealed class Spectrum3DView : View
     {
-        private static readonly SKRect Screen = new SKRect(1030, 412, 1648, 582);
-        private static readonly SKPoint Origin = new SKPoint(1045, 536);   // front-left corner (20 Hz, newest)
-        private static readonly SKPoint FreqAxis = new SKPoint(420, 38);   // 20 Hz -> 20 kHz
-        private static readonly SKPoint TimeAxis = new SKPoint(130, -70);  // newest -> oldest
-        private const float HeightPx = 87f;                                // -60 dB -> 0 dB
-        private static readonly float Slope = FreqAxis.Y / FreqAxis.X;
+        private readonly SKRect _screen;
+        private readonly SKPoint _origin;     // front-left corner (20 Hz, newest)
+        private readonly SKPoint _freqAxis;   // 20 Hz -> 20 kHz
+        private readonly SKPoint _timeAxis;   // newest -> oldest
+        private readonly float _heightPx;     // -60 dB -> 0 dB
+        private readonly float _slope;
 
         // Colour by level; the floor (-60 dB) fades to almost nothing so silence reads as a dark grid, not a sheet.
         private static readonly SKColor[] Rainbow =
@@ -32,13 +32,22 @@ namespace Fabulosa.UI.Views
         private readonly SKPaint _linePaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.05f, StrokeJoin = SKStrokeJoin.Bevel };
         private readonly SKPaint _connPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 0.8f };
 
-        public Spectrum3DView() : base(Layout.Spectrum3D) { }
+        public Spectrum3DView() : base(Layout.Spectrum3D)
+        {
+            _screen = Layout.ScreenOf(Bounds);
+            float w = _screen.Width, h = _screen.Height;
+            _origin = new SKPoint(_screen.Left + 0.024f * w, _screen.Bottom - 0.30f * h);
+            _freqAxis = new SKPoint(0.68f * w, 0.22f * h);
+            _timeAxis = new SKPoint(0.21f * w, -0.41f * h);
+            _heightPx = 0.48f * h;
+            _slope = _freqAxis.Y / _freqAxis.X;
+        }
 
-        private static SKPoint Project(float freqT, float timeT, float heightT)
+        private SKPoint Project(float freqT, float timeT, float heightT)
         {
             return new SKPoint(
-                Origin.X + FreqAxis.X * freqT + TimeAxis.X * timeT,
-                Origin.Y + FreqAxis.Y * freqT + TimeAxis.Y * timeT - HeightPx * heightT);
+                _origin.X + _freqAxis.X * freqT + _timeAxis.X * timeT,
+                _origin.Y + _freqAxis.Y * freqT + _timeAxis.Y * timeT - _heightPx * heightT);
         }
 
         private static float FreqT(float hz) => MathF.Log(hz / 20f) / MathF.Log(1000f);
@@ -46,7 +55,7 @@ namespace Fabulosa.UI.Views
         public override void DrawStatic(SKCanvas c, FrameContext f)
         {
             Theme.Panel(c, Bounds, "3D SPECTRUM");
-            Theme.Screen(c, Screen, new SKColor(0x03, 0x06, 0x08));
+            Theme.Screen(c, _screen, new SKColor(0x03, 0x06, 0x08));
 
             using (var grid = Theme.Stroke(new SKColor(0x12, 0x1c, 0x22), 1f))
             {
@@ -91,7 +100,7 @@ namespace Fabulosa.UI.Views
             }
             var end = Project(1.11f, 0, 0);
             Theme.Text(c, "Hz", end.X, end.Y + 15, 12.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.Sans, SKTextAlign.Center);
-            Theme.Text(c, "TIME  →", 1600f, 566f, 11.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.SansBold, SKTextAlign.Right, 1.5f);
+            Theme.Text(c, "TIME  →", _screen.Right - 48f, _screen.Bottom - 16f, 11.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.SansBold, SKTextAlign.Right, 1.5f);
         }
 
         public override void Draw(SKCanvas c, FrameContext f)
@@ -100,10 +109,10 @@ namespace Fabulosa.UI.Views
             int rows = Analyzer.HistoryRows;
             int bands = Analyzer.BandCount;
             bool mesh = f.State.MeshLines;
-            var skew = SKMatrix.CreateSkew(0, Slope);
+            var skew = SKMatrix.CreateSkew(0, _slope);
 
             c.Save();
-            c.ClipRoundRect(new SKRoundRect(Screen, 4, 4), SKClipOperation.Intersect, true);
+            c.ClipRoundRect(new SKRoundRect(_screen, 4, 4), SKClipOperation.Intersect, true);
             bool havePrev = false;
             for (int k = rows - 1; k >= 0; k--)
             {
@@ -116,8 +125,8 @@ namespace Fabulosa.UI.Views
                 }
                 var baseLeft = Project(0, timeT, 0);
                 var baseRight = Project(1, timeT, 0);
-                float ys = baseLeft.Y - Slope * baseLeft.X;   // baseline in skewed shader space
-                using var shader = SKShader.CreateLinearGradient(new SKPoint(0, ys), new SKPoint(0, ys - HeightPx), Rainbow, RainbowPos, SKShaderTileMode.Clamp, skew);
+                float ys = baseLeft.Y - _slope * baseLeft.X;   // baseline in skewed shader space
+                using var shader = SKShader.CreateLinearGradient(new SKPoint(0, ys), new SKPoint(0, ys - _heightPx), Rainbow, RainbowPos, SKShaderTileMode.Clamp, skew);
 
                 if (mesh && havePrev)
                 {
