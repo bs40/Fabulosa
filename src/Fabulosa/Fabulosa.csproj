@@ -19,6 +19,7 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <InvariantGlobalization>true</InvariantGlobalization>
     <TieredPGO>true</TieredPGO>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -31,6 +32,11 @@
     <!-- Artwork lives in the repository root so it can be swapped without touching the project. -->
     <EmbeddedResource Include="..\..\wordmark.png" LogicalName="Fabulosa.Images.Wordmark" />
     <EmbeddedResource Include="..\..\stickanim.png" LogicalName="Fabulosa.Images.StickAnim" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\..\dancer.mp4')">
+    <!-- The dancer clip is copied beside the exe, never bundled into it; without the file the stick figure simply stays. -->
+    <None Include="..\..\dancer.mp4" Link="dancer.mp4" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>

@@ -97,6 +97,13 @@ namespace Fabulosa.UI.Views
         {
             if (Layout.ShuffleBox.Contains(p)) { _pressed = 0; f.Media?.ToggleShuffle(); return true; }
             if (Layout.RepeatBox.Contains(p)) { _pressed = 1; f.Media?.CycleRepeat(); return true; }
+            if (Layout.ClockBox.Contains(p))
+            {
+                // deliberately silent: no highlight, pressed state or message, so nothing hints that clicks count
+                f.DancerClip?.Preload();
+                f.State.ClockClicked();
+                return true;
+            }
             return false;
         }
 

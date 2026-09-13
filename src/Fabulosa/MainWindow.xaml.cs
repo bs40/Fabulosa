@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -23,6 +25,7 @@ namespace Fabulosa
         private readonly AudioCapture _capture;
         private readonly Analyzer _analyzer;
         private readonly MediaSessionService _media = new MediaSessionService();
+        private readonly DancerClip _clip = new DancerClip(Path.Combine(AppContext.BaseDirectory, "dancer.mp4"));
         private readonly Renderer _renderer;
         private readonly FrameContext _ctx;
         private readonly Stopwatch _frameTimer = Stopwatch.StartNew();
@@ -50,6 +53,7 @@ namespace Fabulosa
                 Analyzer = _analyzer,
                 Capture = _capture,
                 Media = _media,
+                DancerClip = _clip,
                 Host = this,
                 PersistSettings = QueueSaveSettings,
             };
@@ -79,7 +83,7 @@ namespace Fabulosa
             if (!string.IsNullOrEmpty(App.SelfTestPath))
             {
                 var st = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
-                st.Tick += (s, a) => { st.Stop(); RunSelfTest(App.SelfTestPath); Close(); };
+                st.Tick += (s, a) => { st.Stop(); RunSelfTest(App.SelfTestPath); WatchClipLive(App.SelfTestPath); };
                 st.Start();
             }
 
@@ -349,6 +353,34 @@ namespace Fabulosa
                 sb.AppendLine($"  VU needle: 90% of a 0 VU tone after {vu.rise90 * 1000:0} ms, under 10% {vu.fall10 * 1000:0} ms after it stops");
                 Check("VU needle reaches 90% within 200 ms", vu.rise90 > 0 && vu.rise90 <= 0.2);
                 Check("VU needle falls to 10% within 250 ms", vu.fall10 > 0 && vu.fall10 <= 0.25);
+
+                // clock: ten clicks change nothing, the eleventh swaps in the clip, the next swaps back
+                for (int i = 0; i < 10; i++) Click(1596, 895);
+                Check("10 clock clicks keep the stick figure", !_state.ShowDancerClip);
+                Click(1596, 895);
+                Check("11th clock click switches to the dancer clip", _state.ShowDancerClip);
+                Click(1596, 895);
+                Check("one more click switches back to the stick figure", !_state.ShowDancerClip && _state.ClockClicks == 0);
+                for (int i = 0; i < 10; i++) Click(1596, 895);
+                Check("switching back starts the count again", !_state.ShowDancerClip && _state.ClockClicks == 10);
+                Click(1596, 895);
+                Check("11 more clicks bring the clip back", _state.ShowDancerClip);
+
+                bool clipReady = _clip.WaitUntilReady(TimeSpan.FromSeconds(30));
+                sb.AppendLine($"  clip: {_clip.SourceFrames} frames at {_clip.Fps:0.##} fps, {_clip.LeadingFramesSkipped} opening frame(s) skipped, loop of {_clip.LoopFrames} stored at {_clip.Width}x{_clip.Height}");
+                sb.AppendLine($"  clip timing: dancer moves at {_clip.NativeBpm:0.0} BPM -> {_clip.BeatsPerLoop} beats per loop, {_clip.FramesPerBeat:0.###} frames per beat, beat frame {_clip.PhaseFrames:0.0}");
+                sb.AppendLine($"  clip diagnostics: {_clip.Diagnostics}{(_clip.Error != null ? " error: " + _clip.Error : "")}");
+                Check("dancer clip decodes", clipReady);
+                Check("clip loop is a whole number of beats at a dance tempo", clipReady && Math.Abs(_clip.BeatsPerLoop * _clip.FramesPerBeat - _clip.LoopFrames) < 0.01 && _clip.NativeBpm >= 80 && _clip.NativeBpm <= 150);
+                if (clipReady)
+                {
+                    var run = RunClipClock(96, 12, _clip.LoopFrames, _clip.FramesPerBeat, _clip.PhaseFrames);
+                    double expectedClip = 96 / 60.0 * 8 * _clip.FramesPerBeat;
+                    sb.AppendLine($"  clip clock at 96 BPM -> {run.advanced} frames in the last 8 s (expected {expectedClip:0}), {run.backwards} steps back, {run.offBeat} of {run.beats} beats away from the clip's beat frame");
+                    Check("clip advances in time with the beat", Math.Abs(run.advanced - expectedClip) <= 8);
+                    Check("clip never steps back", run.backwards == 0);
+                    Check("the clip's beat frame lands on the music's beat", run.beats > 0 && run.offBeat == 0);
+                }
             }
             catch (Exception ex)
             {
@@ -361,6 +393,7 @@ namespace Fabulosa
                 _state.SpectrumChannel = initialChannel;
                 _state.PeakHoldEnabled = initialPeakHold;
                 _state.DancerFramesPerBeat = initialRate;
+                _state.ResetClockClicks();
             }
             sb.AppendLine($"{pass} passed, {fail} failed");
             File.WriteAllText(reportPath, sb.ToString());
@@ -454,6 +487,70 @@ namespace Fabulosa
                 if (!tone && fall10 < 0 && analyzer.VuLeft <= 0.1f) fall10 = t - 1.0;
             }
             return (rise90, fall10);
+        }
+
+        /// <summary>Runs tracker and clip clock at 60 updates a second over a kick track and measures how the clip keeps time.</summary>
+        private static (int advanced, int backwards, int offBeat, int beats) RunClipClock(double bpm, double seconds, int loopFrames, double framesPerBeat, double phaseFrames)
+        {
+            const int sr = 48000, chunk = 800;
+            var bt = new BeatTracker();
+            bt.Reset(sr);
+            var clock = new ClipClock();
+            var l = new float[chunk];
+            var r = new float[chunk];
+            int total = (int)(seconds * sr), countFrom = total - 8 * sr;
+            int advanced = 0, backwards = 0, offBeat = 0, beats = 0, prev = -1, lastBeats = 0;
+            for (int start = 0; start < total; start += chunk)
+            {
+                FillKickTrack(l, r, start, chunk, sr, bpm);
+                bt.Process(l, r, 0, chunk);
+                int frame = clock.Update(bt, loopFrames, framesPerBeat, phaseFrames);
+                if (prev >= 0 && start >= countFrom)
+                {
+                    int step = ((frame - prev) % loopFrames + loopFrames) % loopFrames;
+                    if (step > loopFrames / 2) backwards++;
+                    else advanced += step;
+                    if (bt.BeatCount != lastBeats)
+                    {
+                        beats++;
+                        double off = ((frame - phaseFrames) % framesPerBeat + framesPerBeat) % framesPerBeat;
+                        if (off > 1.5 && off < framesPerBeat - 1.5) offBeat++;
+                    }
+                }
+                lastBeats = bt.BeatCount;
+                prev = frame;
+            }
+            return (advanced, backwards, offBeat, beats);
+        }
+
+        /// <summary>After the self-test, lets the clip run against live audio for six seconds and records how far it moved.</summary>
+        private void WatchClipLive(string reportPath)
+        {
+            if (!_clip.IsReady) { Close(); return; }
+            _state.ResetClockClicks();
+            for (int i = 0; i < AppState.ClockClicksForClip; i++) _state.ClockClicked();
+            var samples = new List<int>();
+            var clock = Stopwatch.StartNew();
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            timer.Tick += (s, a) =>
+            {
+                samples.Add(_ctx.DancerClipFrame);
+                if (clock.Elapsed.TotalSeconds < 6) return;
+                timer.Stop();
+                int advanced = 0;
+                for (int i = 1; i < samples.Count; i++)
+                    if (samples[i] >= 0 && samples[i - 1] >= 0)
+                        advanced += ((samples[i] - samples[i - 1]) % _clip.LoopFrames + _clip.LoopFrames) % _clip.LoopFrames;
+                double span = clock.Elapsed.TotalSeconds;
+                var beat = _analyzer.Beat;
+                File.WriteAllText(reportPath + ".clip-live.txt",
+                    $"bpm={beat.Bpm:0.0} locked={beat.Locked}\nframes advanced={advanced} in {span:0.0} s, expected about {beat.Bpm / 60.0 * _clip.FramesPerBeat * span:0} at {_clip.FramesPerBeat:0.##} frames per beat\n" +
+                    $"samples={string.Join(" ", samples)}\n");
+                _renderer.RenderToPng(reportPath + ".clip-live.png");
+                _state.ResetClockClicks();
+                Close();
+            };
+            timer.Start();
         }
 
         // ---- persistence ------------------------------------------------------------------

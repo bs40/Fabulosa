@@ -31,6 +31,8 @@ namespace Fabulosa.UI
         public Analyzer Analyzer;
         public AudioCapture Capture;
         public MediaSessionService Media;
+        public DancerClip DancerClip;
+        public int DancerClipFrame = -1;   // clip frame drawn this frame, -1 while the stick figure shows
         public IHost Host;
         public SKPoint Mouse = new SKPoint(-1, -1);
         public bool MouseDown;

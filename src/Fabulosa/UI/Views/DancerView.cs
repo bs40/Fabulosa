@@ -1,11 +1,12 @@
 using System;
 using System.IO;
 using Fabulosa.Audio;
+using Fabulosa.Media;
 using SkiaSharp;
 
 namespace Fabulosa.UI.Views
 {
-    /// <summary>Neon stick figure that dances through its 48 poses in time with the beat.</summary>
+    /// <summary>Neon stick figure that dances through its 48 poses in time with the beat, or the dancer clip once unlocked.</summary>
     public sealed class DancerView : View
     {
         private const int Cols = 12, Rows = 4, Frames = 48;
@@ -19,7 +20,8 @@ namespace Fabulosa.UI.Views
         /// <summary>Top-left corner of the crop that still holds the bottom of the frame number (card y up to 31).</summary>
         private static readonly SKRectI NumberCorner = new SKRectI(0, 0, 32, 9);
 
-        private const float Soft = 3f;   // px over which the number corner and the tile edges fade into the backdrop
+        private const float Soft = 3f;          // px over which the number corner and the tile edges fade into the backdrop
+        private const float ClipTopFade = 28f;  // px over which the clip's top edge melts into its wall colour
 
         /// <summary>The figures are drawn for black; the screen uses the same colour so the tiles have no visible edge.</summary>
         private static readonly SKColor Backdrop = SKColors.Black;
@@ -30,7 +32,11 @@ namespace Fabulosa.UI.Views
         private readonly SKRect _screen;
         private readonly SKRect _dest;
         private readonly BeatSequencer _sequencer = new BeatSequencer(Frames);
+        private readonly ClipClock _clipClock = new ClipClock();
         private readonly SKPaint _tilePaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
+        private readonly SKPaint _clipPaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.Medium };
+        private readonly SKPaint _screenEdge = Theme.Stroke(new SKColor(0x2a, 0x34, 0x33, 190), 1f);
+        private readonly (SKRect Area, SKPaint Paint)[] _screenShade;
         private float _glow;
 
         public DancerView() : base(Layout.Dancer)
@@ -40,6 +46,7 @@ namespace Fabulosa.UI.Views
             float s = Math.Min(inner.Width / Crop.Width, inner.Height / Crop.Height);
             float w = Crop.Width * s, h = Crop.Height * s;
             _dest = new SKRect(inner.MidX - w / 2, inner.MidY - h / 2, inner.MidX + w / 2, inner.MidY + h / 2);
+            _screenShade = BuildScreenShade(_screen);
         }
 
         /// <summary>One opaque image per frame: the card flattened onto the backdrop, cropped, number removed.</summary>
@@ -93,6 +100,22 @@ namespace Fabulosa.UI.Views
             c.DrawRect(area, paint);
         }
 
+        /// <summary>Gradients that recreate the screen's inset shadow on top of the clip, which covers the static one.</summary>
+        private static (SKRect, SKPaint)[] BuildScreenShade(SKRect r)
+        {
+            const float depth = 7f;
+            var dark = new SKColor(0, 0, 0, 110);
+            (SKRect, SKPaint) Band(SKRect area, SKPoint from, SKPoint to) =>
+                (area, new SKPaint { Shader = SKShader.CreateLinearGradient(from, to, new[] { dark, dark.WithAlpha(0) }, null, SKShaderTileMode.Clamp) });
+            return new[]
+            {
+                Band(new SKRect(r.Left, r.Top, r.Right, r.Top + depth), new SKPoint(0, r.Top), new SKPoint(0, r.Top + depth)),
+                Band(new SKRect(r.Left, r.Bottom - depth, r.Right, r.Bottom), new SKPoint(0, r.Bottom), new SKPoint(0, r.Bottom - depth)),
+                Band(new SKRect(r.Left, r.Top, r.Left + depth, r.Bottom), new SKPoint(r.Left, 0), new SKPoint(r.Left + depth, 0)),
+                Band(new SKRect(r.Right - depth, r.Top, r.Right, r.Bottom), new SKPoint(r.Right, 0), new SKPoint(r.Right - depth, 0)),
+            };
+        }
+
         /// <summary>Writes every frame as the panel shows it into one image (self-test aid); returns the frame count.</summary>
         public static int WriteContactSheet(string path)
         {
@@ -118,10 +141,20 @@ namespace Fabulosa.UI.Views
         public override void Draw(SKCanvas c, FrameContext f)
         {
             var bt = f.Analyzer.Beat;
-            int frame = _sequencer.Update(bt, f.State.DancerFramesPerBeat);
-            var tiles = Tiles();
-            if (tiles != null) c.DrawImage(tiles[frame], _dest, _tilePaint);
-            else Theme.Text(c, "stickanim.png missing", _screen.MidX, _screen.MidY, 13f, Theme.TextDim, Theme.Sans, SKTextAlign.Center);
+            int frame = _sequencer.Update(bt, f.State.DancerFramesPerBeat);   // keeps counting under the clip, so the figure carries on when it returns
+            var clip = f.DancerClip;
+            f.DancerClipFrame = -1;
+            if (f.State.ShowDancerClip && clip != null)
+            {
+                clip.Preload();
+                if (clip.IsReady) f.DancerClipFrame = DrawClip(c, clip, bt);
+            }
+            if (f.DancerClipFrame < 0)
+            {
+                var tiles = Tiles();
+                if (tiles != null) c.DrawImage(tiles[frame], _dest, _tilePaint);
+                else Theme.Text(c, "stickanim.png missing", _screen.MidX, _screen.MidY, 13f, Theme.TextDim, Theme.Sans, SKTextAlign.Center);
+            }
 
             // tempo readout in the header row, with a dot that lights on every beat
             float pulse = bt.LastBeatTime >= 0 ? bt.Pulse : 0f;
@@ -138,6 +171,32 @@ namespace Fabulosa.UI.Views
             }
             using var dot = Theme.Fill(Theme.Mix(new SKColor(0x2a, 0x3a, 0x3c), Theme.CyanText, _glow));
             c.DrawCircle(dotX, dotY, 3.5f, dot);
+        }
+
+        /// <summary>
+        /// The clip fills the screen width with its bottom edge on the screen's bottom. Above it the wall
+        /// colour carries on, and the clip's top edge fades into it so hair and hands leave the frame softly.
+        /// Returns the loop frame drawn.
+        /// </summary>
+        private int DrawClip(SKCanvas c, DancerClip clip, BeatTracker beat)
+        {
+            int index = _clipClock.Update(beat, clip.LoopFrames, clip.FramesPerBeat, clip.PhaseFrames);
+            var wall = clip.WallColour(index);
+            float s = Math.Min(_screen.Width / clip.Width, _screen.Height / clip.Height);
+            float w = clip.Width * s, h = clip.Height * s;
+            var dest = new SKRect(_screen.MidX - w / 2, _screen.Bottom - h, _screen.MidX + w / 2, _screen.Bottom);
+
+            c.Save();
+            c.ClipRoundRect(new SKRoundRect(_screen, 4, 4), SKClipOperation.Intersect, true);
+            using (var fill = new SKPaint { Color = wall }) c.DrawRect(_screen, fill);
+            c.DrawImage(clip.Frame(index), dest, _clipPaint);
+            using (var shader = SKShader.CreateLinearGradient(new SKPoint(0, dest.Top), new SKPoint(0, dest.Top + ClipTopFade), new[] { wall, wall.WithAlpha(0) }, null, SKShaderTileMode.Clamp))
+            using (var fade = new SKPaint { Shader = shader })
+                c.DrawRect(new SKRect(_screen.Left, dest.Top, _screen.Right, dest.Top + ClipTopFade), fade);
+            foreach (var (area, paint) in _screenShade) c.DrawRect(area, paint);
+            c.Restore();
+            c.DrawRoundRect(_screen, 4, 4, _screenEdge);
+            return index;
         }
     }
 }
