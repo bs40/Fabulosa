@@ -14,7 +14,7 @@ namespace Fabulosa.Model
         public bool MeshLines { get; set; } = true;
         public bool AlwaysOnTop { get; set; }
         public bool ShowFps { get; set; }
-        /// <summary>Sprite frames the dancer advances per detected beat (0.5 = one frame every two beats).</summary>
-        public float DancerStepsPerBeat { get; set; } = 1f;
+        /// <summary>Sprite frames the dancer advances per detected beat.</summary>
+        public float DancerFramesPerBeat { get; set; } = 4f;
     }
 }

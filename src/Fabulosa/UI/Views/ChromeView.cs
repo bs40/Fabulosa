@@ -3,7 +3,7 @@ using SkiaSharp;
 
 namespace Fabulosa.UI.Views
 {
-    /// <summary>Outer brass frame, chassis, title bar (wordmark, tagline, window buttons) and the menu bar strip.</summary>
+    /// <summary>Outer brass frame, chassis, title bar (wordmark, version, window buttons) and the menu bar strip.</summary>
     public sealed class ChromeView : View
     {
         public int HoverMenu = -1;
@@ -58,8 +58,6 @@ namespace Fabulosa.UI.Views
             DrawScrew(c, 11, 11); DrawScrew(c, 1661, 11); DrawScrew(c, 11, 930); DrawScrew(c, 1661, 930);
 
             DrawWordmark(c);
-
-            Theme.Text(c, "HEAR MORE  ·  FEEL MORE", 836f, 36.5f, 13f, new SKColor(0xcb, 0xbf, 0x94), Theme.SansItalic, SKTextAlign.Center, 6.5f);
         }
 
         /// <summary>Chrome wordmark with its black background keyed out by a screen blend; letters 30 px tall on the bar's centre line.</summary>

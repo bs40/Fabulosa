@@ -293,7 +293,7 @@ namespace Fabulosa
             _ctx.PersistSettings = () => { };
             var initialChannel = _state.SpectrumChannel;
             bool initialPeakHold = _state.PeakHoldEnabled;
-            float initialSteps = _state.DancerStepsPerBeat;
+            float initialRate = _state.DancerFramesPerBeat;
             try
             {
                 Check("renderer produced frames", _renderer.Fps > 0 || _renderer.LastRenderMs > 0);
@@ -308,10 +308,10 @@ namespace Fabulosa
                 Click(250, 197);
                 Check("menu item toggles peak hold and closes menu", _state.PeakHoldEnabled != initialPeakHold && !_renderer.IsMenuOpen);
 
-                // "Dancer: 2 steps per beat" sits after Peak Hold, three releases, a separator, three FFT sizes, a separator, mesh lines and the 1-step item
+                // "Dancer: 2 frames per beat" sits after Peak Hold, three releases, a separator, three FFT sizes, a separator, mesh lines and the 1-frame item
                 Click(230, 72);
                 Click(250, 440);
-                Check("menu sets dancer to 2 steps per beat", Math.Abs(_state.DancerStepsPerBeat - 2f) < 0.01f && !_renderer.IsMenuOpen);
+                Check("menu sets dancer to 2 frames per beat", Math.Abs(_state.DancerFramesPerBeat - 2f) < 0.01f && !_renderer.IsMenuOpen);
 
                 bool drag = _renderer.MouseDown(new SKPoint(700, 30), 1);
                 _renderer.MouseUp(new SKPoint(700, 30));
@@ -324,6 +324,10 @@ namespace Fabulosa
                 _renderer.RenderToPng(png);
                 Check("offscreen render writes a PNG", File.Exists(png) && new FileInfo(png).Length > 100000);
 
+                string frames = reportPath + ".dancer.png";
+                int tiles = UI.Views.DancerView.WriteContactSheet(frames);
+                Check("dancer has 48 cropped frames", tiles == 48 && File.Exists(frames));
+
                 var r128 = RunSyntheticTrack(128, 12);
                 sb.AppendLine($"  128 BPM track -> {r128.bpm:0.0} BPM, {r128.beats} beats, confidence {r128.conf:0.00}");
                 Check("beat tracker finds 128 BPM (+/- 2)", Math.Abs(r128.bpm - 128f) <= 2f);
@@ -334,6 +338,17 @@ namespace Fabulosa
                 Check("beat tracker keeps count at 90 BPM", r90.beats >= 14 && r90.beats <= 22);
                 var silent = RunSyntheticTrack(0, 6);
                 Check("silence produces no beats", silent.beats == 0 && silent.bpm == 0);
+
+                var seq = RunSequencer(128, 12, 4f);
+                double expected = 128 / 60.0 * 8 * 4;
+                sb.AppendLine($"  dancer at 128 BPM, 4 frames per beat -> {seq.advanced} frames in the last 8 s (expected {expected:0}), {seq.outOfOrder} out-of-order changes");
+                Check("dancer advances four frames per beat", Math.Abs(seq.advanced - expected) <= 6);
+                Check("dancer frames stay in sequence", seq.outOfOrder == 0);
+
+                var vu = MeasureVu();
+                sb.AppendLine($"  VU needle: 90% of a 0 VU tone after {vu.rise90 * 1000:0} ms, under 10% {vu.fall10 * 1000:0} ms after it stops");
+                Check("VU needle reaches 90% within 200 ms", vu.rise90 > 0 && vu.rise90 <= 0.2);
+                Check("VU needle falls to 10% within 250 ms", vu.fall10 > 0 && vu.fall10 <= 0.25);
             }
             catch (Exception ex)
             {
@@ -345,41 +360,100 @@ namespace Fabulosa
                 _ctx.PersistSettings = savedPersist;
                 _state.SpectrumChannel = initialChannel;
                 _state.PeakHoldEnabled = initialPeakHold;
-                _state.DancerStepsPerBeat = initialSteps;
+                _state.DancerFramesPerBeat = initialRate;
             }
             sb.AppendLine($"{pass} passed, {fail} failed");
             File.WriteAllText(reportPath, sb.ToString());
         }
 
-        /// <summary>Feeds a synthetic kick-on-every-beat track through a fresh tracker; bpm = 0 gives silence.</summary>
+        /// <summary>A kick drum on every beat over a quiet pad; bpm = 0 gives silence.</summary>
+        private static void FillKickTrack(float[] l, float[] r, int start, int count, int sr, double bpm)
+        {
+            double beatLen = bpm > 0 ? 60.0 / bpm : 0;
+            for (int i = 0; i < count; i++)
+            {
+                float v = 0f;
+                if (beatLen > 0)
+                {
+                    double t = (start + i) / (double)sr;
+                    double tb = t % beatLen;
+                    double kick = Math.Sin(2 * Math.PI * (50 + 80 * Math.Exp(-tb * 30)) * tb) * Math.Exp(-tb * 12) * 0.8;
+                    double pad = 0.03 * Math.Sin(2 * Math.PI * 220 * t);
+                    v = (float)(kick + pad);
+                }
+                l[i] = v; r[i] = v;
+            }
+        }
+
+        /// <summary>Feeds a synthetic track through a fresh tracker and reports what it found.</summary>
         private static (float bpm, int beats, float conf) RunSyntheticTrack(double bpm, double seconds)
         {
-            const int sr = 48000;
+            const int sr = 48000, chunk = 4096;
             var bt = new BeatTracker();
             bt.Reset(sr);
+            var l = new float[chunk];
+            var r = new float[chunk];
             int n = (int)(seconds * sr);
-            var l = new float[4096];
-            var r = new float[4096];
-            double beatLen = bpm > 0 ? 60.0 / bpm : 0;
-            for (int start = 0; start < n; start += 4096)
+            for (int start = 0; start < n; start += chunk)
             {
-                int count = Math.Min(4096, n - start);
-                for (int i = 0; i < count; i++)
-                {
-                    float v = 0f;
-                    if (beatLen > 0)
-                    {
-                        double t = (start + i) / (double)sr;
-                        double tb = t % beatLen;
-                        double kick = Math.Sin(2 * Math.PI * (50 + 80 * Math.Exp(-tb * 30)) * tb) * Math.Exp(-tb * 12) * 0.8;
-                        double pad = 0.03 * Math.Sin(2 * Math.PI * 220 * t);
-                        v = (float)(kick + pad);
-                    }
-                    l[i] = v; r[i] = v;
-                }
+                int count = Math.Min(chunk, n - start);
+                FillKickTrack(l, r, start, count, sr, bpm);
                 bt.Process(l, r, 0, count);
             }
             return (bt.Bpm, bt.BeatCount, bt.Confidence);
+        }
+
+        /// <summary>Runs tracker and sequencer at 60 updates a second, as the render loop does, and counts frame changes.</summary>
+        private static (int advanced, int outOfOrder) RunSequencer(double bpm, double seconds, float framesPerBeat)
+        {
+            const int sr = 48000, chunk = 800;
+            var bt = new BeatTracker();
+            bt.Reset(sr);
+            var seq = new BeatSequencer(48);
+            var l = new float[chunk];
+            var r = new float[chunk];
+            int total = (int)(seconds * sr), countFrom = total - 8 * sr;
+            int advanced = 0, outOfOrder = 0, prev = 0;
+            for (int start = 0; start < total; start += chunk)
+            {
+                FillKickTrack(l, r, start, chunk, sr, bpm);
+                bt.Process(l, r, 0, chunk);
+                int frame = seq.Update(bt, framesPerBeat);
+                if (frame != prev)
+                {
+                    if (frame != (prev + 1) % 48) outOfOrder++;
+                    else if (start >= countFrom) advanced++;
+                }
+                prev = frame;
+            }
+            return (advanced, outOfOrder);
+        }
+
+        /// <summary>Plays a 0 VU tone for one second then silence through a fresh analyser, timing the left needle.</summary>
+        private static (double rise90, double fall10) MeasureVu()
+        {
+            const int sr = 48000, chunk = 800;
+            var buffer = new StereoRingBuffer(sr * 2);
+            var analyzer = new Analyzer(buffer, new AppState()) { SampleRate = sr, FftSize = 4096 };
+            var l = new float[chunk];
+            var r = new float[chunk];
+            double amp = Math.Pow(10, Analyzer.VuReferenceDbfs / 20.0), phase = 0, rise90 = -1, fall10 = -1;
+            for (int frame = 0; frame < 120; frame++)
+            {
+                bool tone = frame < 60;
+                for (int i = 0; i < chunk; i++)
+                {
+                    float v = tone ? (float)(amp * Math.Sin(phase)) : 0f;
+                    phase += 2 * Math.PI * 1000.0 / sr;
+                    l[i] = v; r[i] = v;
+                }
+                buffer.Write(l, r, chunk);
+                analyzer.Update(1f / 60f);
+                double t = (frame + 1) / 60.0;
+                if (tone && rise90 < 0 && analyzer.VuLeft >= 0.9f) rise90 = t;
+                if (!tone && fall10 < 0 && analyzer.VuLeft <= 0.1f) fall10 = t - 1.0;
+            }
+            return (rise90, fall10);
         }
 
         // ---- persistence ------------------------------------------------------------------

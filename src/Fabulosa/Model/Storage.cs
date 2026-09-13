@@ -20,7 +20,7 @@ namespace Fabulosa.Model
         public int FftSize { get; set; } = 8192;
         public float SpectrumReleaseDbPerSec { get; set; } = 42f;
         public bool MeshLines { get; set; } = true;
-        public float DancerStepsPerBeat { get; set; } = 1f;
+        public float DancerFramesPerBeat { get; set; } = 4f;
     }
 
     public static class Storage
@@ -68,7 +68,7 @@ namespace Fabulosa.Model
             state.FftSize = s.FftSize is 4096 or 8192 or 16384 ? s.FftSize : 8192;
             state.SpectrumReleaseDbPerSec = Math.Clamp(s.SpectrumReleaseDbPerSec, 10f, 200f);
             state.MeshLines = s.MeshLines;
-            state.DancerStepsPerBeat = s.DancerStepsPerBeat is 0.5f or 1f or 2f or 4f ? s.DancerStepsPerBeat : 1f;
+            state.DancerFramesPerBeat = s.DancerFramesPerBeat is 1f or 2f or 4f or 8f ? s.DancerFramesPerBeat : 4f;
         }
 
         public static SettingsFile CaptureSettings(AppState state, SettingsFile existing)
@@ -80,7 +80,7 @@ namespace Fabulosa.Model
             s.FftSize = state.FftSize;
             s.SpectrumReleaseDbPerSec = state.SpectrumReleaseDbPerSec;
             s.MeshLines = state.MeshLines;
-            s.DancerStepsPerBeat = state.DancerStepsPerBeat;
+            s.DancerFramesPerBeat = state.DancerFramesPerBeat;
             return s;
         }
     }

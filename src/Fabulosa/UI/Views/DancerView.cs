@@ -1,149 +1,131 @@
 using System;
+using System.IO;
+using Fabulosa.Audio;
 using SkiaSharp;
 
 namespace Fabulosa.UI.Views
 {
-    /// <summary>Neon stick figure that steps through its 48 dance poses on the beat.</summary>
+    /// <summary>Neon stick figure that dances through its 48 poses in time with the beat.</summary>
     public sealed class DancerView : View
     {
         private const int Cols = 12, Rows = 4, Frames = 48;
-        private const float SourceInset = 2f;   // keeps the neighbouring frame out of the bilinear footprint
-        private static SKImage _sheet;
-        private static float _fw, _fh;
-        private static bool _sheetTried;
+
+        /// <summary>
+        /// Part of each 148 x 222 card that is shown, in card-local pixels: inside the card outline and
+        /// tall enough for the highest raised hand (frame 6 reaches y 33).
+        /// </summary>
+        private static readonly SKRectI Crop = new SKRectI(4, 26, 144, 219);
+
+        /// <summary>Top-left corner of the crop that still holds the bottom of the frame number (card y up to 31).</summary>
+        private static readonly SKRectI NumberCorner = new SKRectI(0, 0, 32, 9);
+
+        private const float Soft = 3f;   // px over which the number corner and the tile edges fade into the backdrop
+
+        /// <summary>The figures are drawn for black; the screen uses the same colour so the tiles have no visible edge.</summary>
+        private static readonly SKColor Backdrop = SKColors.Black;
+
+        private static SKImage[] _tiles;
+        private static bool _tilesTried;
 
         private readonly SKRect _screen;
-        private readonly SKRect _sprite;
-        private readonly SKRect _floorRect, _lightRect;
-        private readonly SKPaint _spritePaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
-        private readonly SKPaint _floorPaint;
-        private readonly SKPaint _lightPaint;
+        private readonly SKRect _dest;
+        private readonly BeatSequencer _sequencer = new BeatSequencer(Frames);
+        private readonly SKPaint _tilePaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
         private float _glow;
 
         public DancerView() : base(Layout.Dancer)
         {
             _screen = Layout.ScreenOf(Bounds);
-            EnsureSheet();
-            float fw = _fw > 0 ? _fw : 148f, fh = _fh > 0 ? _fh : 222f;
-            float s = Math.Min((_screen.Width - 16f) / fw, (_screen.Height - 30f) / fh);
-            float w = fw * s, h = fh * s;
-            float top = _screen.Top + 10f;
-            _sprite = new SKRect(_screen.MidX - w / 2, top, _screen.MidX + w / 2, top + h);
-            float floorY = top + h * 0.93f;   // the figures' feet sit at 93 % of the frame height
-
-            float r = w * 0.62f;
-            var squash = SKMatrix.CreateScale(1f, 0.2f, _screen.MidX, floorY);
-            _floorPaint = new SKPaint
-            {
-                IsAntialias = true,
-                Shader = SKShader.CreateRadialGradient(new SKPoint(_screen.MidX, floorY), r,
-                    new[] { new SKColor(0x6a, 0xf0, 0xff), new SKColor(0x3c, 0x7c, 0xff, 120), new SKColor(0x3c, 0x7c, 0xff, 0) },
-                    new[] { 0f, 0.4f, 1f }, SKShaderTileMode.Clamp, squash),
-            };
-            _floorRect = new SKRect(_screen.MidX - r, floorY - r * 0.2f, _screen.MidX + r, floorY + r * 0.2f);
-            _lightPaint = new SKPaint
-            {
-                Shader = SKShader.CreateLinearGradient(new SKPoint(0, floorY), new SKPoint(0, _sprite.Top),
-                    new[] { new SKColor(0x2a, 0x5c, 0xff, 90), new SKColor(0x2a, 0x5c, 0xff, 0) }, null, SKShaderTileMode.Clamp),
-            };
-            _lightRect = new SKRect(_screen.Left, _sprite.Top, _screen.Right, floorY);
+            var inner = SKRect.Inflate(_screen, -6f, -6f);   // stay inside the screen's edge line
+            float s = Math.Min(inner.Width / Crop.Width, inner.Height / Crop.Height);
+            float w = Crop.Width * s, h = Crop.Height * s;
+            _dest = new SKRect(inner.MidX - w / 2, inner.MidY - h / 2, inner.MidX + w / 2, inner.MidY + h / 2);
         }
 
-        private static void EnsureSheet()
+        /// <summary>One opaque image per frame: the card flattened onto the backdrop, cropped, number removed.</summary>
+        private static SKImage[] Tiles()
         {
-            if (_sheet != null || _sheetTried) return;
-            _sheetTried = true;
+            if (_tilesTried) return _tiles;
+            _tilesTried = true;
             try
             {
-                var bmp = Theme.LoadBitmap("Fabulosa.Images.StickAnim");
-                if (bmp == null) return;
-                _fw = bmp.Width / (float)Cols;
-                _fh = bmp.Height / (float)Rows;
-                CleanFrames(bmp);
-                _sheet = SKImage.FromBitmap(bmp);
+                using var sheet = Theme.LoadImage("Fabulosa.Images.StickAnim");
+                if (sheet == null) return null;
+                float fw = sheet.Width / (float)Cols, fh = sheet.Height / (float)Rows;   // 147.83 x 221.75: the cards sit on a fractional grid
+                var tiles = new SKImage[Frames];
+                using var copy = new SKPaint { FilterQuality = SKFilterQuality.None };
+                for (int i = 0; i < Frames; i++)
+                {
+                    int ox = (int)MathF.Round(i % Cols * fw), oy = (int)MathF.Round(i / Cols * fh);
+                    using var surface = SKSurface.Create(new SKImageInfo(Crop.Width, Crop.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                    var c = surface.Canvas;
+                    c.Clear(Backdrop);
+                    c.DrawImage(sheet, SKRect.Create(ox + Crop.Left, oy + Crop.Top, Crop.Width, Crop.Height), SKRect.Create(0, 0, Crop.Width, Crop.Height), copy);
+                    FadeToBackdrop(c);
+                    tiles[i] = surface.Snapshot();
+                }
+                _tiles = tiles;
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine("sprite sheet failed: " + ex.Message); }
+            return _tiles;
         }
 
         /// <summary>
-        /// The sheet has its frame numbers baked into each frame's top-left corner and faint grey grid
-        /// lines along the frame edges. Both are grey/white while the figure is saturated neon, so those
-        /// regions are keyed by saturation.
+        /// Blacks out the number corner and fades the tile edges into the backdrop. Only background
+        /// haze lives in these bands; the figures stay well clear of them.
         /// </summary>
-        private static void CleanFrames(SKBitmap bmp)
+        private static void FadeToBackdrop(SKCanvas c)
         {
-            int w = bmp.Width, h = bmp.Height;
-            var px = bmp.Pixels;
-            int labelW = (int)(_fw * 0.5f), labelH = (int)(_fh * 0.27f);
-            const int edge = 5;
-            for (int row = 0; row < Rows; row++)
-            {
-                for (int col = 0; col < Cols; col++)
-                {
-                    int x0 = (int)MathF.Round(col * _fw), y0 = (int)MathF.Round(row * _fh);
-                    int x1 = Math.Min((int)MathF.Round((col + 1) * _fw), w), y1 = Math.Min((int)MathF.Round((row + 1) * _fh), h);
-                    for (int y = y0; y < y1; y++)
-                    {
-                        int ly = y - y0;
-                        bool edgeRow = ly < edge || y >= y1 - edge;
-                        for (int x = x0; x < x1; x++)
-                        {
-                            int lx = x - x0;
-                            bool inLabel = lx < labelW && ly < labelH;
-                            if (!inLabel && !edgeRow && lx >= edge && x < x1 - edge) continue;
-                            var c = px[y * w + x];
-                            if (c.Alpha == 0) continue;
-                            if (inLabel && c.Alpha < 48) { px[y * w + x] = SKColors.Transparent; continue; }
-                            int mx = Math.Max(c.Red, Math.Max(c.Green, c.Blue));
-                            int mn = Math.Min(c.Red, Math.Min(c.Green, c.Blue));
-                            if (mx - mn < 60) px[y * w + x] = SKColors.Transparent;
-                        }
-                    }
-                }
-            }
-            bmp.Pixels = px;
+            float w = Crop.Width, h = Crop.Height, r = NumberCorner.Right, b = NumberCorner.Bottom;
+            using (var solid = new SKPaint { Color = Backdrop }) c.DrawRect(new SKRect(0, 0, r, b), solid);
+            Fade(c, new SKRect(r, 0, r + Soft, b), new SKPoint(r, 0), new SKPoint(r + Soft, 0));
+            Fade(c, new SKRect(0, b, r + Soft, b + Soft), new SKPoint(0, b), new SKPoint(0, b + Soft));
+            Fade(c, new SKRect(0, 0, w, Soft), new SKPoint(0, 0), new SKPoint(0, Soft));
+            Fade(c, new SKRect(0, 0, Soft, h), new SKPoint(0, 0), new SKPoint(Soft, 0));
+            Fade(c, new SKRect(w - Soft, 0, w, h), new SKPoint(w, 0), new SKPoint(w - Soft, 0));
+            Fade(c, new SKRect(0, h - Soft, w, h), new SKPoint(0, h), new SKPoint(0, h - Soft));
+        }
+
+        private static void Fade(SKCanvas c, SKRect area, SKPoint solidAt, SKPoint clearAt)
+        {
+            using var shader = SKShader.CreateLinearGradient(solidAt, clearAt, new[] { Backdrop, Backdrop.WithAlpha(0) }, null, SKShaderTileMode.Clamp);
+            using var paint = new SKPaint { Shader = shader };
+            c.DrawRect(area, paint);
+        }
+
+        /// <summary>Writes every frame as the panel shows it into one image (self-test aid); returns the frame count.</summary>
+        public static int WriteContactSheet(string path)
+        {
+            var tiles = Tiles();
+            if (tiles == null) return 0;
+            const int gap = 6;
+            int w = Crop.Width, h = Crop.Height;
+            using var surface = SKSurface.Create(new SKImageInfo(Cols * (w + gap) + gap, Rows * (h + gap) + gap, SKColorType.Rgba8888, SKAlphaType.Premul));
+            surface.Canvas.Clear(new SKColor(0x30, 0x34, 0x30));
+            for (int i = 0; i < tiles.Length; i++)
+                surface.Canvas.DrawImage(tiles[i], gap + i % Cols * (w + gap), gap + i / Cols * (h + gap));
+            using var data = surface.Snapshot().Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(path, data.ToArray());
+            return tiles.Length;
         }
 
         public override void DrawStatic(SKCanvas c, FrameContext f)
         {
             Theme.Panel(c, Bounds, "DANCER");
-            Theme.Screen(c, _screen, new SKColor(0x05, 0x08, 0x0f));
+            Theme.Screen(c, _screen, Backdrop);
         }
 
         public override void Draw(SKCanvas c, FrameContext f)
         {
             var bt = f.Analyzer.Beat;
-            bool dancing = bt.LastBeatTime >= 0;
-            int frame = 0;
-            if (dancing)
-            {
-                double steps = (bt.BeatCount + Math.Min(bt.Phase, 0.999f)) * f.State.DancerStepsPerBeat;
-                frame = (int)(Math.Floor(steps) % Frames);
-                if (frame < 0) frame += Frames;
-            }
-            float pulse = dancing ? bt.Pulse : 0f;
-            _glow += (pulse - _glow) * (pulse > _glow ? 0.7f : 0.12f);
-
-            c.Save();
-            c.ClipRoundRect(new SKRoundRect(_screen, 4, 4), SKClipOperation.Intersect, true);
-            _lightPaint.Color = SKColors.White.WithAlpha((byte)(40 + 180 * _glow));
-            c.DrawRect(_lightRect, _lightPaint);
-            _floorPaint.Color = SKColors.White.WithAlpha((byte)(60 + 190 * _glow));
-            c.DrawRect(_floorRect, _floorPaint);
-            if (_sheet != null)
-            {
-                int col = frame % Cols, row = frame / Cols;
-                var src = new SKRect(col * _fw + SourceInset, row * _fh + SourceInset, (col + 1) * _fw - SourceInset, (row + 1) * _fh - SourceInset);
-                float ix = SourceInset * _sprite.Width / _fw, iy = SourceInset * _sprite.Height / _fh;
-                c.DrawImage(_sheet, src, SKRect.Inflate(_sprite, -ix, -iy), _spritePaint);
-            }
-            else
-            {
-                Theme.Text(c, "stickanim.png missing", _screen.MidX, _screen.MidY, 13f, Theme.TextDim, Theme.Sans, SKTextAlign.Center);
-            }
-            c.Restore();
+            int frame = _sequencer.Update(bt, f.State.DancerFramesPerBeat);
+            var tiles = Tiles();
+            if (tiles != null) c.DrawImage(tiles[frame], _dest, _tilePaint);
+            else Theme.Text(c, "stickanim.png missing", _screen.MidX, _screen.MidY, 13f, Theme.TextDim, Theme.Sans, SKTextAlign.Center);
 
             // tempo readout in the header row, with a dot that lights on every beat
+            float pulse = bt.LastBeatTime >= 0 ? bt.Pulse : 0f;
+            _glow += (pulse - _glow) * (pulse > _glow ? 0.7f : 0.12f);
             bool hasTempo = bt.HasTempo;
             string bpm = hasTempo ? $"{bt.Bpm:0} BPM" : "--- BPM";
             var textColour = hasTempo ? Theme.CyanText : new SKColor(0x6e, 0x7a, 0x7a);

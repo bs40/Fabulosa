@@ -116,8 +116,8 @@ namespace Fabulosa.Audio
             if (Beat.SampleRate != sr) Beat.Reset(sr);
             if (freshFrames > 0) Beat.Process(_left, _right, need - freshFrames, freshFrames);
 
-            // --- meters (use the newest 300 ms / 100 ms) ---
-            int vuWindow = Math.Min(need, (int)(sr * 0.3f));
+            // --- meters (use the newest 150 ms / 100 ms) ---
+            int vuWindow = Math.Min(need, (int)(sr * 0.15f));
             int rmsWindow = Math.Min(need, (int)(sr * 0.1f));
             int peakWindow = Math.Max(Math.Min(need, freshFrames), Math.Min(need, sr / 50));
             double sumL = 0, sumR = 0, sumL2 = 0, sumR2 = 0;
@@ -265,8 +265,8 @@ namespace Fabulosa.Audio
 
         private void UpdateVu(float target, ref float vel, float dt, bool left)
         {
-            // Second-order needle: ~300 ms to reach 99 % with a hint of overshoot (VU ballistics).
-            const float omega = 19f, zeta = 0.75f;
+            // Second-order needle at twice the speed of classic VU ballistics (150 ms window instead of 300 ms), with a hint of overshoot.
+            const float omega = 38f, zeta = 0.75f;
             float pos = left ? VuLeft : VuRight;
             target = Math.Min(target, 1.6f);
             int steps = Math.Max(1, (int)(dt / 0.004f));

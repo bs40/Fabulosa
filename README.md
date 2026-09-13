@@ -6,8 +6,8 @@ default output device — Spotify, a browser, a game, anything) and drives a rac
 | Panel | What it shows |
 | --- | --- |
 | Spectrum analyser | 64 log-spaced bands, 20 Hz – 20 kHz, 0 to −60 dB, segmented rainbow bars with peak hold. Click **L+R** to switch to L or R. |
-| Level meters | Two analogue VU meters with true 300 ms ballistics (0 VU = −14 dBFS) plus 30-segment peak / RMS ladders and numeric readouts. |
-| Dancer | A neon stick figure (48-pose sprite sheet, `stickanim.png`) that steps to its next pose on every beat. A beat tracker follows the kick/snare onsets, estimates the tempo (shown as BPM) and keeps a phase-locked clock running through breakdowns. Steps per beat is configurable in the Visualisation menu. |
+| Level meters | Two analogue VU meters with 150 ms ballistics (twice classic VU speed; 0 VU = −14 dBFS) plus 30-segment peak / RMS ladders and numeric readouts. |
+| Dancer | A neon stick figure (48-pose sprite sheet, `stickanim.png`) that dances through its poses in order, four frames per beat. A beat tracker follows the kick/snare onsets, estimates the tempo (shown as BPM) and keeps a phase-locked clock running through breakdowns; frames never skip or step back on timing corrections. The rate (1, 2, 4 or 8 frames per beat) is in the Visualisation menu. |
 | Oscilloscope | Rising-edge-triggered trace, 5 ms per division, auto-ranged. |
 | 3D spectrum | 32 time slices of the spectrum as an oblique wireframe, coloured by level. |
 | Phase scope | X = left, Y = right goniometer with phosphor persistence and a fitted stereo-field ellipse. |
@@ -37,7 +37,7 @@ Output: `publish\Fabulosa.exe`.
 
 `wordmark.png` (title-bar logo, black background keyed out at draw time) and `stickanim.png` (12 × 4 sprite
 sheet of 48 frames, transparent) live in the repository root and are embedded at build time, so they can be
-swapped without touching the code. The frame numbers baked into the sprite corners are removed on load.
+swapped without touching the code. Each frame is flattened onto black and cropped inside its card outline, leaving out the frame number.
 
 ## Test signal
 
@@ -55,7 +55,8 @@ dotnet run --project tools\TestMusic -- --tone 1000 -14      # a -14 dBFS sine s
   writes `out.png.stats.txt` (frame time, levels, detected BPM, per-panel draw cost); exits unless `--keep`.
 - `Fabulosa.exe --windowshot out.png [--delay ms]` captures the live window's visual tree.
 - `Fabulosa.exe --selftest report.txt` exercises the hit-testing, menus and the beat tracker (synthetic 128 and
-  90 BPM tracks plus silence) and writes a PASS/FAIL report.
+  90 BPM tracks plus silence), the dancer frame order and the VU timing, and writes a PASS/FAIL report plus a
+  contact sheet of the cropped dancer frames (`report.txt.dancer.png`).
 
 ## Settings
 

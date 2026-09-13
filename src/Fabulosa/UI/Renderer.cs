@@ -295,10 +295,10 @@ namespace Fabulosa.UI
                     new MenuItem { Label = "FFT 16384 (fine)", Action = ctx => SetFft(ctx, 16384), Checked = ctx => ctx.State.FftSize == 16384 },
                     MenuItem.Separator(),
                     new MenuItem { Label = "3D Mesh Lines", Action = ctx => { ctx.State.MeshLines = !ctx.State.MeshLines; ctx.PersistSettings?.Invoke(); }, Checked = ctx => ctx.State.MeshLines },
-                    new MenuItem { Label = "Dancer: 1 step per beat", Action = ctx => SetDancerSteps(ctx, 1f), Checked = ctx => IsSteps(ctx, 1f) },
-                    new MenuItem { Label = "Dancer: 2 steps per beat", Action = ctx => SetDancerSteps(ctx, 2f), Checked = ctx => IsSteps(ctx, 2f) },
-                    new MenuItem { Label = "Dancer: 4 steps per beat", Action = ctx => SetDancerSteps(ctx, 4f), Checked = ctx => IsSteps(ctx, 4f) },
-                    new MenuItem { Label = "Dancer: 1 step per 2 beats", Action = ctx => SetDancerSteps(ctx, 0.5f), Checked = ctx => IsSteps(ctx, 0.5f) },
+                    new MenuItem { Label = "Dancer: 1 frame per beat", Action = ctx => SetDancerRate(ctx, 1f), Checked = ctx => IsDancerRate(ctx, 1f) },
+                    new MenuItem { Label = "Dancer: 2 frames per beat", Action = ctx => SetDancerRate(ctx, 2f), Checked = ctx => IsDancerRate(ctx, 2f) },
+                    new MenuItem { Label = "Dancer: 4 frames per beat", Action = ctx => SetDancerRate(ctx, 4f), Checked = ctx => IsDancerRate(ctx, 4f) },
+                    new MenuItem { Label = "Dancer: 8 frames per beat", Action = ctx => SetDancerRate(ctx, 8f), Checked = ctx => IsDancerRate(ctx, 8f) },
                     MenuItem.Separator(),
                     new MenuItem { Label = "Show Frame Rate", Action = ctx => ctx.State.ShowFps = !ctx.State.ShowFps, Checked = ctx => ctx.State.ShowFps },
                 }},
@@ -315,7 +315,7 @@ namespace Fabulosa.UI
                     new MenuItem { Label = "How It Works", Action = ctx => ctx.Host.ShowMessage("How Fabulosa works",
                         "Fabulosa listens to whatever Windows is playing (WASAPI loopback on the default output device) and visualises it.\n\n" +
                         "• Spectrum / 3D spectrum: 64 log-spaced bands, 20 Hz – 20 kHz. Click L+R to switch channels.\n" +
-                        "• VU meters: true 300 ms ballistics, 0 VU = -14 dBFS.\n" +
+                        "• VU meters: 150 ms ballistics (twice classic VU speed), 0 VU = -14 dBFS.\n" +
                         "• Oscilloscope: 5 ms/div, rising-edge triggered. Phase scope: X = left, Y = right.\n" +
                         "• Dancer: a beat tracker follows the kick and snare, estimates the tempo and steps the figure\n" +
                         "  to its next pose on every beat (Visualisation menu sets steps per beat).\n" +
@@ -336,8 +336,8 @@ namespace Fabulosa.UI
         private static void SetChannel(FrameContext ctx, SpectrumChannel ch) { ctx.State.SpectrumChannel = ch; ctx.PersistSettings?.Invoke(); }
         private static void SetRelease(FrameContext ctx, float v) { ctx.State.SpectrumReleaseDbPerSec = v; ctx.PersistSettings?.Invoke(); }
         private static void SetFft(FrameContext ctx, int n) { ctx.State.FftSize = n; ctx.Analyzer.FftSize = n; ctx.PersistSettings?.Invoke(); }
-        private static void SetDancerSteps(FrameContext ctx, float v) { ctx.State.DancerStepsPerBeat = v; ctx.PersistSettings?.Invoke(); }
-        private static bool IsSteps(FrameContext ctx, float v) => Math.Abs(ctx.State.DancerStepsPerBeat - v) < 0.01f;
+        private static void SetDancerRate(FrameContext ctx, float v) { ctx.State.DancerFramesPerBeat = v; ctx.PersistSettings?.Invoke(); }
+        private static bool IsDancerRate(FrameContext ctx, float v) => Math.Abs(ctx.State.DancerFramesPerBeat - v) < 0.01f;
 
         private static void SaveScreenshot(FrameContext ctx)
         {
