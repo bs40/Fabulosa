@@ -48,12 +48,14 @@ namespace Fabulosa.Media
     /// </summary>
     public sealed class MediaSessionService : IDisposable
     {
+        private const ulong MaxThumbnailBytes = 16 * 1024 * 1024;
+
         private GlobalSystemMediaTransportControlsSessionManager _manager;
         private GlobalSystemMediaTransportControlsSession _session;
         private readonly object _gate = new object();
         private MediaSnapshot _snapshot = new MediaSnapshot();
         private int _thumbVersion;
-        private string _lastThumbKey;
+        private bool _refreshRunning, _refreshPending;
         private bool _disposed;
 
         public MediaSnapshot Snapshot { get { lock (_gate) return _snapshot; } }
@@ -83,32 +85,73 @@ namespace Fabulosa.Media
             try { session = _manager.GetCurrentSession(); } catch { }
             lock (_gate)
             {
-                if (_session != null && !ReferenceEquals(_session, session))
+                // subscribe only when the session really changes, so repeated notifications cannot stack up handlers
+                if (!ReferenceEquals(_session, session))
                 {
-                    try
+                    Unsubscribe(_session);
+                    _session = session;
+                    if (_session != null)
                     {
-                        _session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
-                        _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
-                        _session.TimelinePropertiesChanged -= OnTimelineChanged;
+                        _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
+                        _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
+                        _session.TimelinePropertiesChanged += OnTimelineChanged;
                     }
-                    catch { }
-                }
-                _session = session;
-                if (_session != null)
-                {
-                    _session.MediaPropertiesChanged += OnMediaPropertiesChanged;
-                    _session.PlaybackInfoChanged += OnPlaybackInfoChanged;
-                    _session.TimelinePropertiesChanged += OnTimelineChanged;
                 }
             }
-            _ = RefreshAllAsync();
+            RequestRefresh();
         }
 
-        private void OnMediaPropertiesChanged(GlobalSystemMediaTransportControlsSession s, MediaPropertiesChangedEventArgs e) => _ = RefreshAllAsync();
+        private void Unsubscribe(GlobalSystemMediaTransportControlsSession session)
+        {
+            if (session == null) return;
+            try
+            {
+                session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
+                session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
+                session.TimelinePropertiesChanged -= OnTimelineChanged;
+            }
+            catch { }
+        }
+
+        private void OnMediaPropertiesChanged(GlobalSystemMediaTransportControlsSession s, MediaPropertiesChangedEventArgs e) => RequestRefresh();
         private void OnPlaybackInfoChanged(GlobalSystemMediaTransportControlsSession s, PlaybackInfoChangedEventArgs e) => RefreshPlayback();
         private void OnTimelineChanged(GlobalSystemMediaTransportControlsSession s, TimelinePropertiesChangedEventArgs e) => RefreshPlayback();
 
-        private async Task RefreshAllAsync()
+        /// <summary>
+        /// Refreshes run one at a time: a change that arrives mid-refresh queues exactly one more pass, so the
+        /// last read always reflects the latest state and a slow earlier read can never overwrite a newer one.
+        /// </summary>
+        private void RequestRefresh()
+        {
+            lock (_gate)
+            {
+                if (_disposed) return;
+                if (_refreshRunning) { _refreshPending = true; return; }
+                _refreshRunning = true;
+            }
+            _ = RefreshLoopAsync();
+        }
+
+        private async Task RefreshLoopAsync()
+        {
+            while (true)
+            {
+                try { await RefreshPropertiesAsync(); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine("media refresh failed: " + ex.Message); }
+                lock (_gate)
+                {
+                    if (!_refreshPending || _disposed) { _refreshRunning = false; return; }
+                    _refreshPending = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reads the metadata and artwork. Windows often reports a new track's title and its artwork as separate
+        /// change events (players fetch the art after switching track), so the artwork is read on every change
+        /// and compared by content, never assumed to belong to the title.
+        /// </summary>
+        private async Task RefreshPropertiesAsync()
         {
             var session = _session;
             if (session == null)
@@ -116,52 +159,48 @@ namespace Fabulosa.Media
                 lock (_gate) _snapshot = new MediaSnapshot();
                 return;
             }
-            try
+            var props = await session.TryGetMediaPropertiesAsync();
+            byte[] art = null;
+            bool artFailed = false;
+            if (props?.Thumbnail != null)
             {
-                var props = await session.TryGetMediaPropertiesAsync();
-                byte[] thumb = null;
-                string thumbKey = (props?.Title ?? "") + "|" + (props?.Artist ?? "") + "|" + (props?.AlbumTitle ?? "");
-                bool sameThumb = thumbKey == _lastThumbKey;
-                if (props?.Thumbnail != null && !sameThumb)
-                {
-                    try
-                    {
-                        using var stream = await props.Thumbnail.OpenReadAsync();
-                        if (stream != null && stream.Size > 0 && stream.Size < 16 * 1024 * 1024)
-                        {
-                            using var reader = new DataReader(stream);
-                            uint size = (uint)stream.Size;
-                            await reader.LoadAsync(size);
-                            thumb = new byte[size];
-                            reader.ReadBytes(thumb);
-                        }
-                    }
-                    catch { thumb = null; }
-                }
-                lock (_gate)
-                {
-                    var old = _snapshot;
-                    var snap = Copy(old);
-                    snap.HasSession = true;
-                    snap.Title = props?.Title ?? "";
-                    snap.Artist = props?.Artist ?? "";
-                    snap.Album = props?.AlbumTitle ?? "";
-                    snap.SourceApp = session.SourceAppUserModelId ?? "";
-                    if (!sameThumb)
-                    {
-                        snap.Thumbnail = thumb;
-                        snap.ThumbnailVersion = ++_thumbVersion;
-                        _lastThumbKey = thumbKey;
-                    }
-                    _snapshot = snap;
-                }
-                RefreshPlayback();
+                try { art = await ReadThumbnailAsync(props.Thumbnail); }
+                catch (Exception) { artFailed = true; }
             }
-            catch (Exception ex)
+            lock (_gate)
             {
-                System.Diagnostics.Debug.WriteLine("media refresh failed: " + ex.Message);
+                if (!ReferenceEquals(session, _session)) return;   // the session changed while reading; its own refresh follows
+                var snap = Copy(_snapshot);
+                string title = props?.Title ?? "", artist = props?.Artist ?? "", album = props?.AlbumTitle ?? "";
+                bool sameTrack = snap.HasSession && title == snap.Title && artist == snap.Artist && album == snap.Album;
+                snap.HasSession = true;
+                snap.Title = title;
+                snap.Artist = artist;
+                snap.Album = album;
+                snap.SourceApp = session.SourceAppUserModelId ?? "";
+                // a failed read keeps the current track's artwork, but never carries artwork over to a new track
+                if (!(artFailed && sameTrack) && !SameBytes(art, snap.Thumbnail))
+                {
+                    snap.Thumbnail = art;
+                    snap.ThumbnailVersion = ++_thumbVersion;
+                }
+                _snapshot = snap;
             }
+            RefreshPlayback();
         }
+
+        private static async Task<byte[]> ReadThumbnailAsync(IRandomAccessStreamReference reference)
+        {
+            using var stream = await reference.OpenReadAsync();
+            if (stream == null || stream.Size == 0 || stream.Size > MaxThumbnailBytes) return null;
+            using var reader = new DataReader(stream);
+            uint loaded = await reader.LoadAsync((uint)stream.Size);
+            var bytes = new byte[loaded];
+            reader.ReadBytes(bytes);
+            return bytes;
+        }
+
+        private static bool SameBytes(byte[] a, byte[] b) => a == null ? b == null : b != null && a.AsSpan().SequenceEqual(b);
 
         private void RefreshPlayback()
         {
@@ -245,20 +284,11 @@ namespace Fabulosa.Media
 
         public void Dispose()
         {
-            _disposed = true;
             lock (_gate)
             {
-                if (_session != null)
-                {
-                    try
-                    {
-                        _session.MediaPropertiesChanged -= OnMediaPropertiesChanged;
-                        _session.PlaybackInfoChanged -= OnPlaybackInfoChanged;
-                        _session.TimelinePropertiesChanged -= OnTimelineChanged;
-                    }
-                    catch { }
-                    _session = null;
-                }
+                _disposed = true;
+                Unsubscribe(_session);
+                _session = null;
             }
         }
     }
