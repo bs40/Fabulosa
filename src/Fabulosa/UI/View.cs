@@ -42,6 +42,7 @@ namespace Fabulosa.UI
         public bool MenuOpen;
         public Action<string> SetStatus;
         public Action MarkStaticDirty;
+        public Action RearrangePanels;
         public Action PersistSettings;
 
         public bool Hover(SKRect r) => !MenuOpen && r.Contains(Mouse);
@@ -50,8 +51,23 @@ namespace Fabulosa.UI
     /// <summary>Base class for the panels. Static content is drawn once into a cached layer.</summary>
     public abstract class View
     {
+        protected View() { }
         protected View(SKRect bounds) { Bounds = bounds; }
-        public SKRect Bounds { get; }
+
+        public SKRect Bounds { get; private set; }
+
+        /// <summary>The visualiser this panel is, for the View menu and the layout; null for the fixed parts of the rack.</summary>
+        public virtual Visualiser? PanelId => null;
+
+        /// <summary>Moves the view. Views that cache geometry rebuild it in <see cref="OnBoundsChanged"/>.</summary>
+        public void SetBounds(SKRect bounds)
+        {
+            if (bounds == Bounds) return;
+            Bounds = bounds;
+            OnBoundsChanged();
+        }
+
+        protected virtual void OnBoundsChanged() { }
 
         public virtual void DrawStatic(SKCanvas c, FrameContext f) { }
         public virtual void Draw(SKCanvas c, FrameContext f) { }

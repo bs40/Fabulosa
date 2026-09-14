@@ -35,6 +35,7 @@ namespace Fabulosa
         private double _lastFrame;
         private bool _closing;
         private float _pendingDt = 1f / 60f;
+        private Visualiser[] _selfTestHiddenBackup;
 
         public MainWindow()
         {
@@ -83,7 +84,7 @@ namespace Fabulosa
             if (!string.IsNullOrEmpty(App.SelfTestPath))
             {
                 var st = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
-                st.Tick += (s, a) => { st.Stop(); RunSelfTest(App.SelfTestPath); WatchClipLive(App.SelfTestPath); };
+                st.Tick += (s, a) => { st.Stop(); RunSelfTest(App.SelfTestPath); WatchLive(App.SelfTestPath); };
                 st.Start();
             }
 
@@ -142,6 +143,7 @@ namespace Fabulosa
             if (dt <= 0 || dt > 0.25f) dt = 1f / 60f;
             if (_capture.SampleRate != _analyzer.SampleRate) _analyzer.SampleRate = _capture.SampleRate;
             if (_analyzer.FftSize != _state.FftSize) _analyzer.FftSize = _state.FftSize;
+            _analyzer.RadialEnabled = _state.IsVisible(Visualiser.Radial);
             try { _analyzer.Update(dt); }
             catch (Exception ex) { App.LogError(ex); }
             _pendingDt = dt;
@@ -292,12 +294,23 @@ namespace Fabulosa
             int pass = 0, fail = 0;
             void Check(string name, bool ok) { sb.AppendLine((ok ? "PASS " : "FAIL ") + name); if (ok) pass++; else fail++; }
             void Click(float x, float y, int clicks = 1) { _renderer.MouseDown(new SKPoint(x, y), clicks); _renderer.MouseUp(new SKPoint(x, y)); }
+            void ClickTitle(string menu) { var p = _renderer.MenuTitleCentre(menu); Click(p.X, p.Y); }
+            void ClickItem(string label)
+            {
+                if (_renderer.MenuItemCentre(label) is SKPoint p) Click(p.X, p.Y);
+                else sb.AppendLine($"  (menu item \"{label}\" not found)");
+            }
+            static bool Overlaps(SKRect a, SKRect b) => a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom;
 
             var savedPersist = _ctx.PersistSettings;
             _ctx.PersistSettings = () => { };
             var initialChannel = _state.SpectrumChannel;
             bool initialPeakHold = _state.PeakHoldEnabled;
             float initialRate = _state.DancerFramesPerBeat;
+            // the test runs with every visualiser shown; the saved choice goes back when the live check ends
+            _selfTestHiddenBackup = _state.HiddenVisualisers.ToArray();
+            _state.HiddenVisualisers.Clear();
+            _renderer.ArrangePanels();
             try
             {
                 Check("renderer produced frames", _renderer.Fps > 0 || _renderer.LastRenderMs > 0);
@@ -306,16 +319,69 @@ namespace Fabulosa
                 Click(1060, 129);
                 Check("spectrum L+R label cycles channel", _state.SpectrumChannel != initialChannel);
 
-                // Visualisation menu: "Peak Hold" is the fourth row (three items, then a separator)
-                Click(230, 72);
+                ClickTitle("Visualisation");
                 Check("menu opens", _renderer.IsMenuOpen);
-                Click(250, 197);
+                ClickItem("Peak Hold");
                 Check("menu item toggles peak hold and closes menu", _state.PeakHoldEnabled != initialPeakHold && !_renderer.IsMenuOpen);
 
-                // "Dancer: 2 frames per beat" sits after Peak Hold, three releases, a separator, three FFT sizes, a separator, mesh lines and the 1-frame item
-                Click(230, 72);
-                Click(250, 440);
+                ClickTitle("Visualisation");
+                ClickItem("Dancer: 2 frames per beat");
                 Check("menu sets dancer to 2 frames per beat", Math.Abs(_state.DancerFramesPerBeat - 2f) < 0.01f && !_renderer.IsMenuOpen);
+
+                // ---- the View menu picker ----
+                ClickTitle("View");
+                Check("View menu lists every visualiser", AppState.AllVisualisers.All(v => _renderer.MenuItemCentre(AppState.NameOf(v)) != null));
+                float phaseWidth = _renderer.BoundsOf(Visualiser.PhaseScope).Width;
+                ClickItem("Oscilloscope");
+                Check("unticking a visualiser hides it and leaves the menu open", !_state.IsVisible(Visualiser.Oscilloscope) && !_renderer.IsShown(Visualiser.Oscilloscope) && _renderer.IsMenuOpen);
+                Check("its neighbour widens into the space", _renderer.BoundsOf(Visualiser.PhaseScope).Width > phaseWidth + 500);
+                ClickItem("Dancer");
+                Check("with the Dancer hidden the lower row reaches the left edge", _renderer.BoundsOf(Visualiser.Spectrum3D).Left < 20 && _renderer.BoundsOf(Visualiser.Radial).Right > 1650);
+                var saved = Storage.CaptureSettings(_state, new SettingsFile());
+                var reloaded = new AppState();
+                Storage.ApplySettings(saved, reloaded);
+                Check("the choice is saved with the settings and read back", saved.HiddenVisualisers.Length == 2 && !reloaded.IsVisible(Visualiser.Oscilloscope) && !reloaded.IsVisible(Visualiser.Dancer) && reloaded.IsVisible(Visualiser.Radial));
+                ClickItem("Show All");
+                Check("Show All brings everything back", _state.HiddenVisualisers.Count == 0 && AppState.AllVisualisers.All(_renderer.IsShown));
+                _renderer.CloseMenus();
+
+                // every combination of shown visualisers: no overlaps, inside the rack, big enough to read
+                int combinations = 1 << AppState.AllVisualisers.Length, bad = 0;
+                string firstBad = null;
+                for (int mask = 0; mask < combinations; mask++)
+                {
+                    bool Shown(Visualiser v) => (mask & (1 << (int)v)) != 0;
+                    var placed = Layout.Arrange(Shown);
+                    bool ok = placed.Count == AppState.AllVisualisers.Count(Shown);
+                    var rects = placed.Values.Append(Layout.NowPlaying).ToList();
+                    foreach (var r in placed.Values)
+                        ok &= r.Left >= Layout.Content.Left && r.Right <= Layout.Content.Right && r.Top >= Layout.NowPlaying.Top && r.Bottom <= Layout.BottomBar.Top && r.Width >= 280 && r.Height >= 190;
+                    for (int i = 0; i < rects.Count; i++)
+                        for (int j = i + 1; j < rects.Count; j++)
+                            ok &= !Overlaps(rects[i], rects[j]);
+                    if (ok) continue;
+                    bad++;
+                    firstBad ??= string.Join("; ", placed.Select(kv => $"{kv.Key} {kv.Value}"));
+                }
+                sb.AppendLine($"  layouts: {combinations} combinations checked{(firstBad == null ? "" : ", first bad: " + firstBad)}");
+                Check("every combination of visualisers lays out cleanly", bad == 0);
+
+                // pictures of a few layouts to look at
+                foreach (var (name, hidden) in new (string, Visualiser[])[]
+                {
+                    ("all", Array.Empty<Visualiser>()),
+                    ("no-dancer-no-scope", new[] { Visualiser.Dancer, Visualiser.Oscilloscope }),
+                    ("radial-focus", new[] { Visualiser.Oscilloscope, Visualiser.PhaseScope, Visualiser.Spectrum3D, Visualiser.LevelMeters }),
+                })
+                {
+                    _state.HiddenVisualisers.Clear();
+                    _state.HiddenVisualisers.UnionWith(hidden);
+                    _renderer.ArrangePanels();
+                    _renderer.RenderToPng($"{reportPath}.layout-{name}.png");
+                }
+                _state.HiddenVisualisers.Clear();
+                _renderer.ArrangePanels();
+                Check("layout pictures written", File.Exists($"{reportPath}.layout-radial-focus.png"));
 
                 bool drag = _renderer.MouseDown(new SKPoint(700, 30), 1);
                 _renderer.MouseUp(new SKPoint(700, 30));
@@ -523,32 +589,61 @@ namespace Fabulosa
             return (advanced, backwards, offBeat, beats);
         }
 
-        /// <summary>After the self-test, lets the clip run against live audio for six seconds and records how far it moved.</summary>
-        private void WatchClipLive(string reportPath)
+        /// <summary>
+        /// After the self-test, watches the live render loop for six seconds: the radial view has to turn and pulse with
+        /// the music, and the dancer clip (when present) has to keep time. Then the saved view choice is put back and the app closes.
+        /// </summary>
+        private void WatchLive(string reportPath)
         {
-            if (!_clip.IsReady) { Close(); return; }
+            var radial = _renderer.ViewOf<UI.Views.RadialSpectrumView>();
+            float startTurn = radial.RotationDegrees, strongestPulse = 0f;
+            bool clip = _clip.IsReady;
             _state.ResetClockClicks();
-            for (int i = 0; i < AppState.ClockClicksForClip; i++) _state.ClockClicked();
+            if (clip) for (int i = 0; i < AppState.ClockClicksForClip; i++) _state.ClockClicked();
             var samples = new List<int>();
             var clock = Stopwatch.StartNew();
             var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
             timer.Tick += (s, a) =>
             {
                 samples.Add(_ctx.DancerClipFrame);
+                strongestPulse = Math.Max(strongestPulse, radial.Pulse);
                 if (clock.Elapsed.TotalSeconds < 6) return;
                 timer.Stop();
-                int advanced = 0;
-                for (int i = 1; i < samples.Count; i++)
-                    if (samples[i] >= 0 && samples[i - 1] >= 0)
-                        advanced += ((samples[i] - samples[i - 1]) % _clip.LoopFrames + _clip.LoopFrames) % _clip.LoopFrames;
-                double span = clock.Elapsed.TotalSeconds;
-                var beat = _analyzer.Beat;
-                File.WriteAllText(reportPath + ".clip-live.txt",
-                    $"bpm={beat.Bpm:0.0} locked={beat.Locked}\nframes advanced={advanced} in {span:0.0} s, expected about {beat.Bpm / 60.0 * _clip.FramesPerBeat * span:0} at {_clip.FramesPerBeat:0.##} frames per beat\n" +
-                    $"samples={string.Join(" ", samples)}\n");
-                _renderer.RenderToPng(reportPath + ".clip-live.png");
-                _state.ResetClockClicks();
-                Close();
+                try
+                {
+                    double span = clock.Elapsed.TotalSeconds;
+                    var beat = _analyzer.Beat;
+                    float turned = (radial.RotationDegrees - startTurn + 360f) % 360f;
+                    var report = new StringBuilder();
+                    report.AppendLine($"bpm={beat.Bpm:0.0} locked={beat.Locked}");
+                    report.AppendLine($"{(Math.Abs(turned - 6 * span) < 6 ? "PASS" : "FAIL")} radial turned {turned:0.0} degrees clockwise in {span:0.0} s (a turn a minute is {6 * span:0.0})");
+                    report.AppendLine($"{(strongestPulse > 0.5f ? "PASS" : "FAIL")} radial pulsed, strongest pulse {strongestPulse:0.00}");
+                    if (clip)
+                    {
+                        int advanced = 0;
+                        for (int i = 1; i < samples.Count; i++)
+                            if (samples[i] >= 0 && samples[i - 1] >= 0)
+                                advanced += ((samples[i] - samples[i - 1]) % _clip.LoopFrames + _clip.LoopFrames) % _clip.LoopFrames;
+                        report.AppendLine($"clip frames advanced={advanced} in {span:0.0} s, expected about {beat.Bpm / 60.0 * _clip.FramesPerBeat * span:0} at {_clip.FramesPerBeat:0.##} frames per beat");
+                        _renderer.RenderToPng(reportPath + ".clip-live.png");
+                    }
+                    _state.ResetClockClicks();
+                    _renderer.RenderToPng(reportPath + ".radial-live.png");
+                    _state.HiddenVisualisers.Clear();
+                    _state.HiddenVisualisers.UnionWith(new[] { Visualiser.Oscilloscope, Visualiser.PhaseScope, Visualiser.Spectrum3D, Visualiser.LevelMeters });
+                    _renderer.ArrangePanels();
+                    _renderer.RenderToPng(reportPath + ".radial-large-live.png");
+                    File.WriteAllText(reportPath + ".live.txt", report.ToString());
+                }
+                catch (Exception ex) { File.WriteAllText(reportPath + ".live.txt", "EXCEPTION " + ex); }
+                finally
+                {
+                    _state.ResetClockClicks();
+                    _state.HiddenVisualisers.Clear();
+                    if (_selfTestHiddenBackup != null) _state.HiddenVisualisers.UnionWith(_selfTestHiddenBackup);
+                    _renderer.ArrangePanels();
+                    Close();
+                }
             };
             timer.Start();
         }

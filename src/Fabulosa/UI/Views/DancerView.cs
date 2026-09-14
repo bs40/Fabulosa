@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Fabulosa.Audio;
 using Fabulosa.Media;
+using Fabulosa.Model;
 using SkiaSharp;
 
 namespace Fabulosa.UI.Views
@@ -29,23 +30,26 @@ namespace Fabulosa.UI.Views
         private static SKImage[] _tiles;
         private static bool _tilesTried;
 
-        private readonly SKRect _screen;
-        private readonly SKRect _dest;
+        private SKRect _screen;
+        private SKRect _dest;
+        private (SKRect Area, SKPaint Paint)[] _screenShade = Array.Empty<(SKRect, SKPaint)>();
         private readonly BeatSequencer _sequencer = new BeatSequencer(Frames);
         private readonly ClipClock _clipClock = new ClipClock();
         private readonly SKPaint _tilePaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
         private readonly SKPaint _clipPaint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.Medium };
         private readonly SKPaint _screenEdge = Theme.Stroke(new SKColor(0x2a, 0x34, 0x33, 190), 1f);
-        private readonly (SKRect Area, SKPaint Paint)[] _screenShade;
         private float _glow;
 
-        public DancerView() : base(Layout.Dancer)
+        public override Visualiser? PanelId => Visualiser.Dancer;
+
+        protected override void OnBoundsChanged()
         {
             _screen = Layout.ScreenOf(Bounds);
             var inner = SKRect.Inflate(_screen, -6f, -6f);   // stay inside the screen's edge line
             float s = Math.Min(inner.Width / Crop.Width, inner.Height / Crop.Height);
             float w = Crop.Width * s, h = Crop.Height * s;
             _dest = new SKRect(inner.MidX - w / 2, inner.MidY - h / 2, inner.MidX + w / 2, inner.MidY + h / 2);
+            foreach (var (_, paint) in _screenShade) paint.Dispose();
             _screenShade = BuildScreenShade(_screen);
         }
 

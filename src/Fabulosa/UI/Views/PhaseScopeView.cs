@@ -1,4 +1,5 @@
 using System;
+using Fabulosa.Model;
 using SkiaSharp;
 
 namespace Fabulosa.UI.Views
@@ -7,16 +8,20 @@ namespace Fabulosa.UI.Views
     public sealed class PhaseScopeView : View
     {
         private static readonly SKColor Bg = new SKColor(0x04, 0x14, 0x10);
-        private readonly SKRect _screen;
-        private readonly float _unit;
+        private SKRect _screen;
+        private float _unit;
         private SKSurface _persist;
         private int _pw, _ph;
         private SKPoint[] _pts = new SKPoint[2048];
 
-        public PhaseScopeView() : base(Layout.Phase)
+        public override Visualiser? PanelId => Visualiser.PhaseScope;
+
+        protected override void OnBoundsChanged()
         {
             _screen = Layout.ScreenOf(Bounds);
-            _unit = _screen.Height * 0.49f;   // pixels per normalised unit; the cloud is auto-ranged by the analyser
+            _unit = Math.Min(_screen.Width, _screen.Height) * 0.49f;   // pixels per normalised unit; the cloud is auto-ranged by the analyser
+            _persist?.Dispose();
+            _persist = null;
         }
 
         public override void DrawStatic(SKCanvas c, FrameContext f)

@@ -8,13 +8,14 @@ namespace Fabulosa.Audio
     /// <summary>
     /// Per-frame analysis of the captured audio: log-spaced band spectrum with smoothing and
     /// peak hold, VU ballistics, peak/RMS meters, oscilloscope trace, phase-scope points, the
-    /// 3D waterfall history and the beat tracker. Everything is computed on the UI thread from
-    /// a snapshot of the ring buffer, so views can read the arrays directly.
+    /// 3D waterfall and radial histories and the beat tracker. Everything is computed on the UI
+    /// thread from a snapshot of the ring buffer, so views can read the arrays directly.
     /// </summary>
     public sealed class Analyzer
     {
         public const int BandCount = 64;
         public const int HistoryRows = 32;
+        public const int RadialRows = 28;
         public const int ScopePoints = 440;
         public const int PhasePoints = 1000;
         public const float MinDb = -60f;
@@ -22,19 +23,26 @@ namespace Fabulosa.Audio
         public const float DisplayOffsetDb = 10f;
         /// <summary>0 VU reference in dBFS (sine). -14 dBFS suits streaming-normalised material.</summary>
         public const float VuReferenceDbfs = -14f;
+        private const float RadialRowSeconds = 0.04f;
+        /// <summary>A short window for the radial view (46 ms at 44.1 kHz), about one row long, so successive rows stay independent and spikes stay sharp.</summary>
+        private const int RadialFftSize = 2048;
 
         private readonly StereoRingBuffer _buffer;
         private readonly AppState _state;
         private Fft _fft;
+        private readonly Fft _radialFft = new Fft(RadialFftSize);
         private float[] _left = new float[16384];
         private float[] _right = new float[16384];
         private float[] _mono = new float[16384];
         private float[] _power = new float[8192];
+        private readonly float[] _radialWindow = new float[RadialFftSize];
+        private readonly float[] _radialPower = new float[RadialFftSize / 2];
         private readonly float[] _bandLo = new float[BandCount];
         private readonly float[] _bandHi = new float[BandCount];
         private readonly float[] _bandCentre = new float[BandCount];
         private readonly float[] _peakHoldTimer = new float[BandCount];
-        private double _historyClock;
+        private double _historyClock, _radialClock;
+        private float _radialLoudest = 0.4f;
         private long _lastTotalWritten;
         private float _peakHoldTimerL, _peakHoldTimerR;
         private float _phaseScale = 100f;
@@ -47,6 +55,8 @@ namespace Fabulosa.Audio
             _state = state;
             History = new float[HistoryRows][];
             for (int i = 0; i < HistoryRows; i++) { History[i] = new float[BandCount]; Array.Fill(History[i], MinDb); }
+            RadialHistory = new float[RadialRows][];
+            for (int i = 0; i < RadialRows; i++) RadialHistory[i] = new float[BandCount * 2];
             Array.Fill(Bands, MinDb);
             Array.Fill(BandPeaks, MinDb);
             ConfigureBands();
@@ -56,6 +66,9 @@ namespace Fabulosa.Audio
         public int FftSize { get; set; } = 8192;
         public BeatTracker Beat { get; } = new BeatTracker();
 
+        /// <summary>The radial view's per-channel spectra cost two extra FFTs, so they are only worked out while it is shown.</summary>
+        public bool RadialEnabled { get; set; }
+
         // ---- outputs -------------------------------------------------------------------
         /// <summary>Smoothed band levels in dB (MinDb..0+).</summary>
         public float[] Bands { get; } = new float[BandCount];
@@ -64,6 +77,11 @@ namespace Fabulosa.Audio
         /// <summary>Waterfall rows, index 0 = newest.</summary>
         public float[][] History { get; }
         public int HistoryHead { get; private set; }
+        /// <summary>Radial spike heights (0..1), row 0 = newest: the left channel's bands, then the right channel's.</summary>
+        public float[][] RadialHistory { get; }
+        public int RadialHead { get; private set; }
+        /// <summary>How far the newest radial row has travelled towards the next (0..1), for smooth outward motion.</summary>
+        public float RadialPhase { get; private set; }
         /// <summary>VU deflection (linear, 1.0 = 0 VU) per channel after ballistics.</summary>
         public float VuLeft { get; private set; }
         public float VuRight { get; private set; }
@@ -123,10 +141,10 @@ namespace Fabulosa.Audio
             double sumL = 0, sumR = 0, sumL2 = 0, sumR2 = 0;
             float pkL = 0, pkR = 0;
             int startVu = need - vuWindow, startRms = need - rmsWindow, startPk = need - peakWindow;
-            for (int i = startVu; i < need; i++)
+            for (int i = Math.Min(startVu, Math.Min(startRms, startPk)); i < need; i++)
             {
                 float l = _left[i], r = _right[i];
-                sumL += l * l; sumR += r * r;
+                if (i >= startVu) { sumL += l * l; sumR += r * r; }
                 if (i >= startRms) { sumL2 += l * l; sumR2 += r * r; }
                 if (i >= startPk)
                 {
@@ -169,26 +187,7 @@ namespace Fabulosa.Audio
             float release = _state.SpectrumReleaseDbPerSec * dt;
             for (int b = 0; b < BandCount; b++)
             {
-                float lo = _bandLo[b] / binHz, hi = _bandHi[b] / binHz;
-                float p;
-                int iLo = (int)MathF.Ceiling(lo), iHi = (int)MathF.Floor(hi - 1e-4f);
-                if (iHi < iLo)
-                {
-                    // narrower than a bin: interpolate the power of the two neighbouring bins
-                    float c = _bandCentre[b] / binHz;
-                    int i0 = Math.Clamp((int)c, 1, bins - 2);
-                    float t = c - i0;
-                    p = _power[i0] * (1 - t) + _power[i0 + 1] * t;
-                }
-                else
-                {
-                    // sum the power of every bin in the band
-                    p = 0f;
-                    iLo = Math.Clamp(iLo, 1, bins - 1);
-                    iHi = Math.Clamp(iHi, 1, bins - 1);
-                    for (int i = iLo; i <= iHi; i++) p += _power[i];
-                }
-                float value = 10f * MathF.Log10(p + 1e-12f) + DisplayOffsetDb;
+                float value = 10f * MathF.Log10(BandPower(b, binHz, bins) + 1e-12f) + DisplayOffsetDb;
                 if (value < MinDb) value = MinDb;
                 if (value > 6f) value = 6f;
 
@@ -203,6 +202,29 @@ namespace Fabulosa.Audio
                     _peakHoldTimer[b] -= dt;
                     if (_peakHoldTimer[b] < 0) BandPeaks[b] = Math.Max(cur, BandPeaks[b] - 24f * dt);
                 }
+            }
+
+            // --- radial spectrum: each channel's band heights, a new row every 40 ms ---
+            if (RadialEnabled)
+            {
+                _radialClock += dt;
+                if (_radialClock >= RadialRowSeconds)
+                {
+                    _radialClock = Math.Min(_radialClock - RadialRowSeconds, RadialRowSeconds);
+                    RadialHead = (RadialHead + RadialRows - 1) % RadialRows;
+                    var row = RadialHistory[RadialHead];
+                    int start = need - RadialFftSize;
+                    float loudest = Math.Max(ChannelLevels(_left, start, sr, row, 0), ChannelLevels(_right, start, sr, row, BandCount));
+                    // gentle automatic gain: the loudest band of the last couple of seconds stands at full height
+                    _radialLoudest = Math.Max(loudest, _radialLoudest * 0.985f);
+                    float gain = 1f / Math.Max(_radialLoudest, 0.4f);
+                    for (int i = 0; i < row.Length; i++)
+                    {
+                        float t = Math.Min(1f, row[i] * gain);
+                        row[i] = t * t * t * t;   // to the fourth power: quiet bands lie flat and the loudest stand up as spikes
+                    }
+                }
+                RadialPhase = (float)Math.Clamp(_radialClock / RadialRowSeconds, 0.0, 1.0);
             }
 
             // --- waterfall history (new row every ~38 ms; 32 rows span ~1.2 s) ---
@@ -261,6 +283,62 @@ namespace Fabulosa.Audio
                 PhaseEllipseB = (float)(2.2 * Math.Sqrt(l2));
                 PhaseEllipseAngle = (float)(0.5 * Math.Atan2(2 * sxy, sxx - syy));
             }
+        }
+
+        /// <summary>Power in band b from the last FFT: the sum over its bins, or interpolated when the band is narrower than a bin.</summary>
+        private float BandPower(int b, float binHz, int bins)
+        {
+            float lo = _bandLo[b] / binHz, hi = _bandHi[b] / binHz;
+            int iLo = (int)MathF.Ceiling(lo), iHi = (int)MathF.Floor(hi - 1e-4f);
+            if (iHi < iLo)
+            {
+                float c = _bandCentre[b] / binHz;
+                int i0 = Math.Clamp((int)c, 1, bins - 2);
+                float t = c - i0;
+                return _power[i0] * (1 - t) + _power[i0 + 1] * t;
+            }
+            float p = 0f;
+            iLo = Math.Clamp(iLo, 1, bins - 1);
+            iHi = Math.Clamp(iHi, 1, bins - 1);
+            for (int i = iLo; i <= iHi; i++) p += _power[i];
+            return p;
+        }
+
+        /// <summary>
+        /// One channel's band levels for the radial view on a 0..1 dB scale, taking each band's loudest bin so
+        /// neighbouring bands differ and read as separate spikes. Returns the loudest band's level.
+        /// </summary>
+        private float ChannelLevels(float[] samples, int start, int sr, float[] row, int offset)
+        {
+            Array.Copy(samples, start, _radialWindow, 0, RadialFftSize);
+            _radialFft.Power(_radialWindow, _radialPower);
+            float binHz = (float)sr / RadialFftSize;
+            int bins = RadialFftSize / 2;
+            float loudest = 0f;
+            for (int b = 0; b < BandCount; b++)
+            {
+                float lo = _bandLo[b] / binHz, hi = _bandHi[b] / binHz;
+                int iLo = (int)MathF.Ceiling(lo), iHi = (int)MathF.Floor(hi - 1e-4f);
+                float p = 0f;
+                if (iHi < iLo)
+                {
+                    float c = _bandCentre[b] / binHz;
+                    int i0 = Math.Clamp((int)c, 1, bins - 2);
+                    float t = c - i0;
+                    p = _radialPower[i0] * (1 - t) + _radialPower[i0 + 1] * t;
+                }
+                else
+                {
+                    iLo = Math.Clamp(iLo, 1, bins - 1);
+                    iHi = Math.Clamp(iHi, 1, bins - 1);
+                    for (int i = iLo; i <= iHi; i++) if (_radialPower[i] > p) p = _radialPower[i];
+                }
+                float db = 10f * MathF.Log10(p + 1e-12f) + DisplayOffsetDb;
+                float level = Math.Clamp((db - MinDb) / -MinDb, 0f, 1f);
+                row[offset + b] = level;
+                if (level > loudest) loudest = level;
+            }
+            return loudest;
         }
 
         private void UpdateVu(float target, ref float vel, float dt, bool left)

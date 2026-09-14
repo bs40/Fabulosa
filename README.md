@@ -10,8 +10,12 @@ default output device — Spotify, a browser, a game, anything) and drives a rac
 | Dancer | A neon stick figure (48-pose sprite sheet, `stickanim.png`) that dances through its poses in order, four frames per beat. A beat tracker follows the kick/snare onsets, estimates the tempo (shown as BPM) and keeps a phase-locked clock running through breakdowns; frames never skip or step back on timing corrections. The rate (1, 2, 4 or 8 frames per beat) is in the Visualisation menu. |
 | Oscilloscope | Rising-edge-triggered trace, 5 ms per division, auto-ranged. |
 | 3D spectrum | 32 time slices of the spectrum as an oblique wireframe, coloured by level. |
+| Radial spectrum | A tilted ring of spokes, one per band: the right channel runs down one side and the left channel back up the other, with the last second of each band flowing outward as spikes. It pulses on the beat and turns slowly clockwise. |
 | Phase scope | X = left, Y = right goniometer with phosphor persistence and a fitted stereo-field ellipse. |
 | Now playing | Title, artist, album, artwork, progress and transport controls from the Windows media session of the app that is playing. Shuffle / repeat in the footer control it too. |
+
+The **View** menu picks which visualisers are shown. The rest of the rack closes up around the ones you keep,
+and the choice is remembered between runs.
 
 Drag the title bar to move the window, double-click it (or F11) to maximise — the whole UI scales uniformly,
 and **Tools → Reset Window Size** returns it to the native 1672 × 941 pixels of the design. Space toggles
@@ -54,9 +58,10 @@ dotnet run --project tools\TestMusic -- --tone 1000 -14      # a -14 dBFS sine s
 - `Fabulosa.exe --screenshot out.png [--delay ms] [--keep]` renders a frame at native resolution to a PNG and
   writes `out.png.stats.txt` (frame time, levels, detected BPM, per-panel draw cost); exits unless `--keep`.
 - `Fabulosa.exe --windowshot out.png [--delay ms]` captures the live window's visual tree.
-- `Fabulosa.exe --selftest report.txt` exercises the hit-testing, menus and the beat tracker (synthetic 128 and
-  90 BPM tracks plus silence), the dancer frame order and the VU timing, and writes a PASS/FAIL report plus a
-  contact sheet of the cropped dancer frames (`report.txt.dancer.png`).
+- `Fabulosa.exe --selftest report.txt` exercises the hit-testing, menus, the View picker and every combination of
+  shown visualisers, the beat tracker (synthetic 128 and 90 BPM tracks plus silence), the dancer frame order, the
+  VU timing and the radial view's rotation, and writes a PASS/FAIL report plus pictures of a few layouts
+  (`report.txt.layout-*.png`) and a contact sheet of the cropped dancer frames (`report.txt.dancer.png`).
 
 ## Settings
 

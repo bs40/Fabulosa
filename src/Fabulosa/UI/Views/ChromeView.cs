@@ -6,11 +6,15 @@ namespace Fabulosa.UI.Views
     /// <summary>Outer brass frame, chassis, title bar (wordmark, version, window buttons) and the menu bar strip.</summary>
     public sealed class ChromeView : View
     {
+        private const float MenuSpacing = 30f;
+
         public int HoverMenu = -1;
         public int OpenMenu = -1;
         public float Fps;
         public float RenderMs;
-        public readonly float[] MenuWidths = new float[Layout.MenuTitles.Length];
+        private readonly float[] _menuWidths = new float[Layout.MenuTitles.Length];
+        private readonly float[] _menuX = new float[Layout.MenuTitles.Length];
+        private readonly float _dividerX;
 
         // The wordmark PNG (2172 x 724, chrome letters on black) is cropped to its glow; these are the letters' extents within that crop.
         private static readonly SKRect WordmarkCrop = new SKRect(33, 120, 2172, 491);
@@ -21,10 +25,21 @@ namespace Fabulosa.UI.Views
         public ChromeView() : base(Layout.Window)
         {
             using var p = Theme.TextPaint(17f, SKColors.White, Theme.Sans);
-            for (int i = 0; i < Layout.MenuTitles.Length; i++) MenuWidths[i] = p.MeasureText(Layout.MenuTitles[i]);
+            float x = 30f;
+            for (int i = 0; i < Layout.MenuTitles.Length; i++)
+            {
+                _menuWidths[i] = p.MeasureText(Layout.MenuTitles[i]);
+                _menuX[i] = x;
+                x += _menuWidths[i] + MenuSpacing;
+                if (Layout.MenuTitles[i] == "Visualisation")
+                {
+                    _dividerX = x - MenuSpacing + 19f;   // a divider separates the display menus from Tools and Help
+                    x += 12f;
+                }
+            }
         }
 
-        public SKRect MenuRect(int i) => new SKRect(Layout.MenuX[i] - 10, 58, Layout.MenuX[i] + MenuWidths[i] + 10, 86);
+        public SKRect MenuRect(int i) => new SKRect(_menuX[i] - 10, 58, _menuX[i] + _menuWidths[i] + 10, 86);
 
         public override void DrawStatic(SKCanvas c, FrameContext f)
         {
@@ -53,7 +68,7 @@ namespace Fabulosa.UI.Views
             using (var mp = Theme.Fill(Theme.MenuBg)) c.DrawRect(Layout.MenuBar, mp);
             using (var e1 = Theme.Fill(new SKColor(0x6e, 0x6a, 0x52))) c.DrawRect(new SKRect(12, 91, 1660, 92.5f), e1);
             using (var e2 = Theme.Fill(new SKColor(0x08, 0x0a, 0x08))) c.DrawRect(new SKRect(12, 92.5f, 1660, 94.5f), e2);
-            using (var div = Theme.Fill(new SKColor(0x26, 0x33, 0x34))) c.DrawRect(new SKRect(303, 58, 304, 86), div);
+            using (var div = Theme.Fill(new SKColor(0x26, 0x33, 0x34))) c.DrawRect(new SKRect(_dividerX, 58, _dividerX + 1, 86), div);
 
             DrawScrew(c, 11, 11); DrawScrew(c, 1661, 11); DrawScrew(c, 11, 930); DrawScrew(c, 1661, 930);
 
@@ -110,7 +125,7 @@ namespace Fabulosa.UI.Views
                     using var hl = Theme.Fill(open ? new SKColor(0x27, 0x3b, 0x3e) : new SKColor(0x1c, 0x2c, 0x2f));
                     c.DrawRoundRect(r, 4, 4, hl);
                 }
-                Theme.Text(c, Layout.MenuTitles[i], Layout.MenuX[i], 77f, 17f, open ? SKColors.White : new SKColor(0xe6, 0xe6, 0xe6), Theme.Sans);
+                Theme.Text(c, Layout.MenuTitles[i], _menuX[i], 77f, 17f, open ? SKColors.White : new SKColor(0xe6, 0xe6, 0xe6), Theme.Sans);
             }
 
             DrawWindowButton(c, Layout.BtnMinimize, 0, f.Hover(Layout.BtnMinimize));
@@ -118,7 +133,7 @@ namespace Fabulosa.UI.Views
             DrawWindowButton(c, Layout.BtnClose, 2, f.Hover(Layout.BtnClose));
 
             if (f.State.ShowFps)
-                Theme.Text(c, $"{Fps:0} fps   {RenderMs:0.0} ms", 640f, 77f, 12f, Theme.TextDim, Theme.Sans);
+                Theme.Text(c, $"{Fps:0} fps   {RenderMs:0.0} ms", _menuX[^1] + _menuWidths[^1] + 60f, 77f, 12f, Theme.TextDim, Theme.Sans);
         }
 
         private static void DrawWindowButton(SKCanvas c, SKRect r, int kind, bool hover)

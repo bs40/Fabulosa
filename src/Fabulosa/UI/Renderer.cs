@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using Fabulosa.Audio;
 using Fabulosa.Model;
 using Fabulosa.UI.Views;
@@ -16,6 +17,7 @@ namespace Fabulosa.UI
     public sealed class Renderer : IDisposable
     {
         private readonly List<View> _views = new List<View>();
+        private readonly List<View> _visible = new List<View>();
         private readonly ChromeView _chrome;
         private readonly BottomBarView _bottomBar;
         private readonly MenuSystem _menus;
@@ -28,7 +30,7 @@ namespace Fabulosa.UI
         private readonly Stopwatch _frameClock = new Stopwatch();
         private double _fpsAccum, _msAccum;
         private int _fpsFrames;
-        private double[] _profileMs;
+        private readonly Dictionary<View, double> _profileMs = new Dictionary<View, double>();
 
         public FrameContext Ctx { get; }
 
@@ -46,11 +48,36 @@ namespace Fabulosa.UI
             _views.Add(new OscilloscopeView());
             _views.Add(new PhaseScopeView());
             _views.Add(new Spectrum3DView());
+            _views.Add(new RadialSpectrumView());
             _views.Add(_bottomBar);
 
             ctx.SetStatus = msg => { _bottomBar.Status = msg; _bottomBar.StatusUntil = ctx.Time + 3f; };
             ctx.MarkStaticDirty = () => _staticDirty = true;
+            ctx.RearrangePanels = ArrangePanels;
+            ArrangePanels();
         }
+
+        /// <summary>Shows the visualisers the user picked and lays them out; hidden ones neither draw nor take input.</summary>
+        public void ArrangePanels()
+        {
+            var placed = Layout.Arrange(Ctx.State.IsVisible);
+            _visible.Clear();
+            foreach (var view in _views)
+            {
+                if (view.PanelId is Visualiser id)
+                {
+                    if (!placed.TryGetValue(id, out var bounds)) continue;
+                    view.SetBounds(bounds);
+                }
+                _visible.Add(view);
+            }
+            if (_captured != null && !_visible.Contains(_captured)) _captured = null;
+            _staticDirty = true;
+        }
+
+        public bool IsShown(Visualiser v) => _visible.Any(view => view.PanelId == v);
+        public SKRect BoundsOf(Visualiser v) => _views.First(view => view.PanelId == v).Bounds;
+        public T ViewOf<T>() where T : View => _views.OfType<T>().FirstOrDefault();
 
         public void InvalidateStatic() => _staticDirty = true;
 
@@ -82,7 +109,9 @@ namespace Fabulosa.UI
             c.Clear(Theme.Letterbox);
             ApplyTransform(c);
             _chrome.DrawStatic(c, Ctx);
-            foreach (var v in _views) v.DrawStatic(c, Ctx);
+            foreach (var v in _visible) v.DrawStatic(c, Ctx);
+            if (!AppState.AllVisualisers.Any(Ctx.State.IsVisible))
+                Theme.Text(c, "Pick visualisers from the View menu", Layout.VisualiserArea.MidX, Layout.VisualiserArea.MidY, 16f, Theme.TextDim, Theme.Sans, SKTextAlign.Center, 1f);
             _static = surface.Snapshot();
             _staticW = w; _staticH = h;
             _staticDirty = false;
@@ -105,20 +134,13 @@ namespace Fabulosa.UI
 
             _chrome.HoverMenu = _menus.IsOpen ? -1 : HitMenuTitle(Ctx.Mouse);
             _chrome.OpenMenu = _menus.OpenIndex;
-            if (Profile)
+            foreach (var v in _visible)
             {
-                _profileMs ??= new double[_views.Count];
-                for (int i = 0; i < _views.Count; i++)
-                {
-                    long t0 = Stopwatch.GetTimestamp();
-                    _views[i].Draw(canvas, Ctx);
-                    double ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
-                    _profileMs[i] = _profileMs[i] * 0.9 + ms * 0.1;
-                }
-            }
-            else
-            {
-                foreach (var v in _views) v.Draw(canvas, Ctx);
+                if (!Profile) { v.Draw(canvas, Ctx); continue; }
+                long t0 = Stopwatch.GetTimestamp();
+                v.Draw(canvas, Ctx);
+                double ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+                _profileMs[v] = _profileMs.TryGetValue(v, out double avg) ? avg * 0.9 + ms * 0.1 : ms;
             }
             _chrome.Draw(canvas, Ctx);
             _menus.Draw(canvas, Ctx);
@@ -143,9 +165,9 @@ namespace Fabulosa.UI
 
         public string ProfileReport()
         {
-            if (_profileMs == null) return "";
             var sb = new System.Text.StringBuilder();
-            for (int i = 0; i < _views.Count; i++) sb.Append(_views[i].GetType().Name).Append('=').Append(_profileMs[i].ToString("0.00")).Append("ms\n");
+            foreach (var v in _visible)
+                if (_profileMs.TryGetValue(v, out double ms)) sb.Append(v.GetType().Name).Append('=').Append(ms.ToString("0.00")).Append("ms\n");
             return sb.ToString();
         }
 
@@ -182,6 +204,16 @@ namespace Fabulosa.UI
             for (int i = 0; i < Layout.MenuTitles.Length; i++) if (_chrome.MenuRect(i).Contains(p)) return i;
             return -1;
         }
+
+        /// <summary>Centre of a menu-bar title (self-test aid).</summary>
+        public SKPoint MenuTitleCentre(string title)
+        {
+            var r = _chrome.MenuRect(Array.IndexOf(Layout.MenuTitles, title));
+            return new SKPoint(r.MidX, r.MidY);
+        }
+
+        /// <summary>Centre of an item in the open menu, or null (self-test aid).</summary>
+        public SKPoint? MenuItemCentre(string label) => _menus.ItemCentre(label, Ctx);
 
         public void MouseMove(SKPoint p)
         {
@@ -220,7 +252,7 @@ namespace Fabulosa.UI
             if (Layout.BtnMaximize.Contains(p)) { Ctx.Host.ToggleMaximize(); return false; }
             if (Layout.BtnClose.Contains(p)) { Ctx.Host.CloseWindow(); return false; }
 
-            foreach (var v in _views)
+            foreach (var v in _visible)
             {
                 if (!v.HitTest(p)) continue;
                 if (clickCount == 2 && v.OnDoubleClick(p, Ctx)) { _captured = null; return false; }
@@ -247,14 +279,14 @@ namespace Fabulosa.UI
         {
             Ctx.Mouse = p;
             if (_menus.IsOpen) return;
-            foreach (var v in _views)
+            foreach (var v in _visible)
                 if (v.HitTest(p) && v.OnWheel(p, delta, Ctx)) return;
         }
 
         public void CloseMenus() => _menus.Close();
         public bool IsMenuOpen => _menus.IsOpen;
 
-        // ---- menus --------------------------------------------------------------------
+        // ---- menus (same order as Layout.MenuTitles) ------------------------------------
 
         private List<Menu> BuildMenus()
         {
@@ -278,6 +310,20 @@ namespace Fabulosa.UI
                     new MenuItem { DynamicLabel = ctx => "Source: " + (ctx.Capture?.DeviceName ?? "none"), Enabled = _ => false },
                     new MenuItem { DynamicLabel = ctx => "Format: " + (ctx.Capture?.FormatDescription ?? ""), Enabled = _ => false },
                     new MenuItem { Label = "Restart Capture", Action = ctx => ctx.Host.RestartCapture() },
+                }},
+                new Menu { Title = "View", Build = f =>
+                {
+                    // the picker: ticks stay open so several visualisers can be switched in one go
+                    var items = AppState.AllVisualisers.Select(v => new MenuItem
+                    {
+                        Label = AppState.NameOf(v),
+                        KeepOpen = true,
+                        Checked = ctx => ctx.State.IsVisible(v),
+                        Action = ctx => ShowVisualisers(ctx, !ctx.State.IsVisible(v), v),
+                    }).ToList();
+                    items.Add(MenuItem.Separator());
+                    items.Add(new MenuItem { Label = "Show All", KeepOpen = true, Enabled = ctx => ctx.State.HiddenVisualisers.Count > 0, Action = ctx => ShowVisualisers(ctx, true, AppState.AllVisualisers) });
+                    return items;
                 }},
                 new Menu { Title = "Visualisation", Build = f => new List<MenuItem>
                 {
@@ -315,14 +361,24 @@ namespace Fabulosa.UI
                     new MenuItem { Label = "How It Works", Action = ctx => ctx.Host.ShowMessage("How Fabulosa works",
                         "Fabulosa listens to whatever Windows is playing (WASAPI loopback on the default output device) and visualises it.\n\n" +
                         "• Spectrum / 3D spectrum: 64 log-spaced bands, 20 Hz – 20 kHz. Click L+R to switch channels.\n" +
+                        "• Radial spectrum: a spoke per band, right channel down one side and left channel up the other, with the\n" +
+                        "  last second flowing outward as spikes. It pulses on the beat and turns slowly clockwise.\n" +
                         "• VU meters: 150 ms ballistics (twice classic VU speed), 0 VU = -14 dBFS.\n" +
                         "• Oscilloscope: 5 ms/div, rising-edge triggered. Phase scope: X = left, Y = right.\n" +
                         "• Dancer: a beat tracker follows the kick and snare, estimates the tempo and steps the figure\n" +
-                        "  to its next pose on every beat (Visualisation menu sets steps per beat).\n" +
-                        "• Now Playing and the transport buttons use the Windows media session of the app that is playing.") },
+                        "  through its poses, four frames per beat (the Visualisation menu changes the rate).\n" +
+                        "• Now Playing and the transport buttons use the Windows media session of the app that is playing.\n\n" +
+                        "The View menu picks which visualisers are shown; the choice is remembered.") },
                     new MenuItem { Label = "About Fabulosa", Action = ctx => ctx.Host.ShowMessage("Fabulosa", "Fabulosa v3.2\nMusic-reactive visualiser for Windows.") },
                 }},
             };
+        }
+
+        private static void ShowVisualisers(FrameContext ctx, bool visible, params Visualiser[] which)
+        {
+            foreach (var v in which) ctx.State.SetVisible(v, visible);
+            ctx.RearrangePanels?.Invoke();
+            ctx.PersistSettings?.Invoke();
         }
 
         private static bool HasSession(FrameContext ctx) => ctx.Media?.Snapshot.HasSession == true;

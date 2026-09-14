@@ -12,6 +12,8 @@ namespace Fabulosa.UI
         public Func<FrameContext, bool> Checked;
         public Func<FrameContext, bool> Enabled;
         public bool IsSeparator;
+        /// <summary>The menu stays open after this item is clicked, so several toggles can be flipped in a row.</summary>
+        public bool KeepOpen;
 
         public static MenuItem Separator() => new MenuItem { IsSeparator = true };
         public string GetLabel(FrameContext f) => DynamicLabel != null ? DynamicLabel(f) : Label;
@@ -70,6 +72,20 @@ namespace Fabulosa.UI
             return -1;
         }
 
+        /// <summary>Centre of the open menu's item with this label, or null (used by the self-test).</summary>
+        public SKPoint? ItemCentre(string label, FrameContext f)
+        {
+            if (!IsOpen) return null;
+            float y = _dropRect.Top + 4;
+            foreach (var it in _items)
+            {
+                float h = it.IsSeparator ? 9 : ItemH;
+                if (!it.IsSeparator && it.GetLabel(f) == label) return new SKPoint(_dropRect.MidX, y + h / 2);
+                y += h;
+            }
+            return null;
+        }
+
         public void MouseMove(SKPoint p) { _hoverItem = ItemAt(p); }
 
         /// <summary>Returns true when the click was consumed by the menu.</summary>
@@ -82,7 +98,7 @@ namespace Fabulosa.UI
                 var item = _items[i];
                 if (item.IsEnabled(f))
                 {
-                    Close();
+                    if (!item.KeepOpen) Close();
                     try { item.Action?.Invoke(f); }
                     catch (Exception ex) { f.Host?.ShowMessage("Fabulosa", ex.Message); }
                 }

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Fabulosa.Audio;
@@ -21,6 +22,7 @@ namespace Fabulosa.Model
         public float SpectrumReleaseDbPerSec { get; set; } = 42f;
         public bool MeshLines { get; set; } = true;
         public float DancerFramesPerBeat { get; set; } = 4f;
+        public string[] HiddenVisualisers { get; set; } = Array.Empty<string>();
     }
 
     public static class Storage
@@ -69,6 +71,9 @@ namespace Fabulosa.Model
             state.SpectrumReleaseDbPerSec = Math.Clamp(s.SpectrumReleaseDbPerSec, 10f, 200f);
             state.MeshLines = s.MeshLines;
             state.DancerFramesPerBeat = s.DancerFramesPerBeat is 1f or 2f or 4f or 8f ? s.DancerFramesPerBeat : 4f;
+            state.HiddenVisualisers.Clear();
+            foreach (string name in s.HiddenVisualisers ?? Array.Empty<string>())
+                if (Enum.TryParse(name, out Visualiser v) && Enum.IsDefined(v)) state.HiddenVisualisers.Add(v);
         }
 
         public static SettingsFile CaptureSettings(AppState state, SettingsFile existing)
@@ -81,6 +86,7 @@ namespace Fabulosa.Model
             s.SpectrumReleaseDbPerSec = state.SpectrumReleaseDbPerSec;
             s.MeshLines = state.MeshLines;
             s.DancerFramesPerBeat = state.DancerFramesPerBeat;
+            s.HiddenVisualisers = state.HiddenVisualisers.Select(v => v.ToString()).OrderBy(n => n, StringComparer.Ordinal).ToArray();
             return s;
         }
     }

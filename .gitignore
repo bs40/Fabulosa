@@ -8,4 +8,5 @@ publish/
 *.stats.txt
 TestResults/
 Thumbs.db
-dancer.mp4
+# videos (the dancer clips) are never committed
+*.mp4

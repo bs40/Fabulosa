@@ -1,7 +1,12 @@
+using System;
+using System.Collections.Generic;
 using Fabulosa.Audio;
 
 namespace Fabulosa.Model
 {
+    /// <summary>The panels the View menu can show or hide, in menu order.</summary>
+    public enum Visualiser { Spectrum, LevelMeters, Dancer, Oscilloscope, PhaseScope, Spectrum3D, Radial }
+
     /// <summary>Everything the user can change. Plain properties; the renderer reads them every frame.</summary>
     public sealed class AppState
     {
@@ -16,6 +21,31 @@ namespace Fabulosa.Model
         public bool ShowFps { get; set; }
         /// <summary>Sprite frames the dancer advances per detected beat.</summary>
         public float DancerFramesPerBeat { get; set; } = 4f;
+
+        public static readonly Visualiser[] AllVisualisers = Enum.GetValues<Visualiser>();
+
+        public static string NameOf(Visualiser v) => v switch
+        {
+            Visualiser.Spectrum => "Spectrum Analyser",
+            Visualiser.LevelMeters => "Level Meters",
+            Visualiser.Dancer => "Dancer",
+            Visualiser.Oscilloscope => "Oscilloscope",
+            Visualiser.PhaseScope => "Phase Scope",
+            Visualiser.Spectrum3D => "3D Spectrum",
+            Visualiser.Radial => "Radial Spectrum",
+            _ => v.ToString(),
+        };
+
+        /// <summary>Visualisers the user has hidden. The hidden set is what gets saved, so visualisers added later start out shown.</summary>
+        public HashSet<Visualiser> HiddenVisualisers { get; } = new HashSet<Visualiser>();
+
+        public bool IsVisible(Visualiser v) => !HiddenVisualisers.Contains(v);
+
+        public void SetVisible(Visualiser v, bool visible)
+        {
+            if (visible) HiddenVisualisers.Remove(v);
+            else HiddenVisualisers.Add(v);
+        }
 
         /// <summary>Clicks on the clock that swap the stick figure for the dancer clip.</summary>
         public const int ClockClicksForClip = 11;

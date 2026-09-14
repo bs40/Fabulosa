@@ -1,5 +1,6 @@
 using System;
 using Fabulosa.Audio;
+using Fabulosa.Model;
 using SkiaSharp;
 
 namespace Fabulosa.UI.Views
@@ -7,12 +8,12 @@ namespace Fabulosa.UI.Views
     /// <summary>Waterfall: 32 time slices of the 64-band spectrum drawn as an oblique wireframe, coloured by level.</summary>
     public sealed class Spectrum3DView : View
     {
-        private readonly SKRect _screen;
-        private readonly SKPoint _origin;     // front-left corner (20 Hz, newest)
-        private readonly SKPoint _freqAxis;   // 20 Hz -> 20 kHz
-        private readonly SKPoint _timeAxis;   // newest -> oldest
-        private readonly float _heightPx;     // -60 dB -> 0 dB
-        private readonly float _slope;
+        private SKRect _screen;
+        private SKPoint _origin;     // front-left corner (20 Hz, newest)
+        private SKPoint _freqAxis;   // 20 Hz -> 20 kHz
+        private SKPoint _timeAxis;   // newest -> oldest
+        private float _heightPx;     // -60 dB -> 0 dB
+        private float _slope;
 
         // Colour by level; the floor (-60 dB) fades to almost nothing so silence reads as a dark grid, not a sheet.
         private static readonly SKColor[] Rainbow =
@@ -32,7 +33,9 @@ namespace Fabulosa.UI.Views
         private readonly SKPaint _linePaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.05f, StrokeJoin = SKStrokeJoin.Bevel };
         private readonly SKPaint _connPaint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 0.8f };
 
-        public Spectrum3DView() : base(Layout.Spectrum3D)
+        public override Visualiser? PanelId => Visualiser.Spectrum3D;
+
+        protected override void OnBoundsChanged()
         {
             _screen = Layout.ScreenOf(Bounds);
             float w = _screen.Width, h = _screen.Height;
@@ -85,22 +88,28 @@ namespace Fabulosa.UI.Views
                     c.DrawLine(p.X, p.Y, p.X + 5, p.Y, axis);
                 }
             }
+            var labelColour = new SKColor(0xd0, 0xd0, 0xd0);
             var dbTop = Project(1, 1, 1);
-            Theme.Text(c, "dB", dbTop.X + 10, dbTop.Y + 4, 12.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.Sans);
+            Theme.Text(c, "dB", dbTop.X + 10, dbTop.Y + 4, 12.5f, labelColour, Theme.Sans);
             for (int db = -20; db >= -60; db -= 20)
             {
                 var p = Project(1, 1, (db + 60) / 60f);
-                Theme.Text(c, db.ToString(), p.X + 10, p.Y + 4, 12.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.Sans);
+                Theme.Text(c, db.ToString(), p.X + 10, p.Y + 4, 12.5f, labelColour, Theme.Sans);
             }
+            // frequency labels that would collide in a narrow panel are left out
             (float hz, string label)[] marks = { (20, "20"), (50, "50"), (100, "100"), (200, "200"), (500, "500"), (1000, "1K"), (2000, "2K"), (5000, "5K"), (10000, "10K"), (20000, "20K") };
+            float lastRight = float.MinValue;
             foreach (var (hz, label) in marks)
             {
                 var p = Project(FreqT(hz), 0, 0);
-                Theme.Text(c, label, p.X, p.Y + 15, 12.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.Sans, SKTextAlign.Center);
+                float w = Theme.Measure(label, 12.5f, Theme.Sans);
+                if (p.X - w / 2 < lastRight + 5f) continue;
+                Theme.Text(c, label, p.X, p.Y + 15, 12.5f, labelColour, Theme.Sans, SKTextAlign.Center);
+                lastRight = p.X + w / 2;
             }
             var end = Project(1.11f, 0, 0);
-            Theme.Text(c, "Hz", end.X, end.Y + 15, 12.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.Sans, SKTextAlign.Center);
-            Theme.Text(c, "TIME  →", _screen.Right - 48f, _screen.Bottom - 16f, 11.5f, new SKColor(0xd0, 0xd0, 0xd0), Theme.SansBold, SKTextAlign.Right, 1.5f);
+            Theme.Text(c, "Hz", end.X, end.Y + 15, 12.5f, labelColour, Theme.Sans, SKTextAlign.Center);
+            Theme.Text(c, "TIME  →", _screen.Right - 48f, _screen.Bottom - 16f, 11.5f, labelColour, Theme.SansBold, SKTextAlign.Right, 1.5f);
         }
 
         public override void Draw(SKCanvas c, FrameContext f)

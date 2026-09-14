@@ -1,4 +1,5 @@
 using System;
+using Fabulosa.Model;
 using SkiaSharp;
 
 namespace Fabulosa.UI.Views
@@ -13,7 +14,20 @@ namespace Fabulosa.UI.Views
         private const int LedCount = 30;
         private const float PivotDrop = 70f, Radius = 148f, Sweep = 38f;
 
-        public LevelMetersView() : base(Layout.Meters) { }
+        /// <summary>The meters are drawn for this 542 x 274 panel and scaled uniformly into whatever space the layout gives them.</summary>
+        private static readonly SKRect Natural = new SKRect(1114, 100, 1656, 374);
+        private SKMatrix _toBounds = SKMatrix.Identity;
+
+        public override Visualiser? PanelId => Visualiser.LevelMeters;
+
+        protected override void OnBoundsChanged()
+        {
+            float s = Math.Min(Bounds.Width / Natural.Width, Bounds.Height / Natural.Height);
+            _toBounds = SKMatrix.CreateScaleTranslation(s, s, Bounds.MidX - Natural.MidX * s, Bounds.MidY - Natural.MidY * s);
+        }
+
+        /// <summary>The little power indicator stays in the panel's top-right corner whatever the panel's size.</summary>
+        private SKPoint PowerLed => new SKPoint(Bounds.Right - 26f, Bounds.Top + 19f);
 
         private static SKRect Face(SKRect bezel) => new SKRect(bezel.Left + 10, bezel.Top + 9, bezel.Right - 10, bezel.Top + 113);
         private static SKPoint Pivot(SKRect face) => new SKPoint(face.MidX, face.Bottom + PivotDrop);
@@ -25,6 +39,14 @@ namespace Fabulosa.UI.Views
         public override void DrawStatic(SKCanvas c, FrameContext f)
         {
             Theme.Panel(c, Bounds, "LEVEL METERS");
+
+            var led = PowerLed;
+            using (var ring = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(led.X - 1, led.Y - 1), 6f, new[] { new SKColor(0x3a, 0x40, 0x40), new SKColor(0x10, 0x14, 0x14) }, null, SKShaderTileMode.Clamp) })
+                c.DrawCircle(led, 5.5f, ring);
+            using (var rimp = Theme.Stroke(new SKColor(0x55, 0x5c, 0x5c), 0.8f)) c.DrawCircle(led, 5.5f, rimp);
+
+            c.Save();
+            c.Concat(ref _toBounds);
             DrawMeterStatic(c, BezelL, "LEFT");
             DrawMeterStatic(c, BezelR, "RIGHT");
 
@@ -42,11 +64,7 @@ namespace Fabulosa.UI.Views
             using (var rb = Theme.Fill(new SKColor(0x05, 0x0a, 0x0b))) c.DrawRoundRect(Readout, 3, 3, rb);
             using (var re = Theme.Stroke(new SKColor(0x2c, 0x35, 0x36), 1f)) c.DrawRoundRect(Readout, 3, 3, re);
             using (var div = Theme.Fill(new SKColor(0x2c, 0x35, 0x36))) c.DrawRect(new SKRect(Readout.Left + 4, 334.5f, Readout.Right - 4, 335.5f), div);
-
-            // little power indicator at the panel's top right
-            using (var ring = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(1629, 118), 6f, new[] { new SKColor(0x3a, 0x40, 0x40), new SKColor(0x10, 0x14, 0x14) }, null, SKShaderTileMode.Clamp) })
-                c.DrawCircle(1630, 119, 5.5f, ring);
-            using (var rimp = Theme.Stroke(new SKColor(0x55, 0x5c, 0x5c), 0.8f)) c.DrawCircle(1630, 119, 5.5f, rimp);
+            c.Restore();
         }
 
         private static void DrawMeterStatic(SKCanvas c, SKRect bezel, string label)
@@ -110,6 +128,8 @@ namespace Fabulosa.UI.Views
         public override void Draw(SKCanvas c, FrameContext f)
         {
             var a = f.Analyzer;
+            c.Save();
+            c.Concat(ref _toBounds);
             DrawNeedle(c, BezelL, a.VuLeft);
             DrawNeedle(c, BezelR, a.VuRight);
 
@@ -118,15 +138,16 @@ namespace Fabulosa.UI.Views
 
             Theme.Text(c, FormatDb(a.PeakDb), 1628f, 328.5f, 14f, new SKColor(0xd9, 0xd9, 0xd9), Theme.Sans, SKTextAlign.Right, 0.5f);
             Theme.Text(c, FormatDb(a.RmsDb), 1628f, 354.5f, 14f, new SKColor(0xd9, 0xd9, 0xd9), Theme.Sans, SKTextAlign.Right, 0.5f);
+            c.Restore();
 
             // power LED glows when audio is flowing
             bool live = f.Capture != null && f.Capture.IsRunning;
             using var led = Theme.Fill(live ? new SKColor(0x4a, 0xff, 0x6a) : new SKColor(0x3a, 0x40, 0x40));
-            c.DrawCircle(1630, 119, 2.4f, led);
+            c.DrawCircle(PowerLed, 2.4f, led);
             if (live && a.SignalPresent)
             {
                 using var glow = Theme.Glow(new SKColor(0x4a, 0xff, 0x6a), 3f, 140);
-                c.DrawCircle(1630, 119, 3f, glow);
+                c.DrawCircle(PowerLed, 3f, glow);
             }
         }
 

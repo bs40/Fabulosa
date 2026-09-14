@@ -1,5 +1,6 @@
 using System;
 using Fabulosa.Audio;
+using Fabulosa.Model;
 using SkiaSharp;
 
 namespace Fabulosa.UI.Views
@@ -7,16 +8,15 @@ namespace Fabulosa.UI.Views
     /// <summary>Triggered oscilloscope, 5 ms per division over ten divisions.</summary>
     public sealed class OscilloscopeView : View
     {
-        private readonly SKRect _screen;
+        private SKRect _screen;
         private readonly SKPoint[] _trace = new SKPoint[Analyzer.ScopePoints];
         private readonly SKPath _path = new SKPath();
         private float _agcPeak = 0.3f;
         private float _gain = 110f;
 
-        public OscilloscopeView() : base(Layout.Scope)
-        {
-            _screen = Layout.ScreenOf(Bounds);
-        }
+        public override Visualiser? PanelId => Visualiser.Oscilloscope;
+
+        protected override void OnBoundsChanged() => _screen = Layout.ScreenOf(Bounds);
 
         public override void DrawStatic(SKCanvas c, FrameContext f)
         {
