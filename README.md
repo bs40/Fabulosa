@@ -77,3 +77,7 @@ src/Fabulosa/Model     App state and settings persistence
 src/Fabulosa/UI        Skia renderer, theme, layout, menus and one view per panel
 tools/TestMusic        Test-signal generator
 ```
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
