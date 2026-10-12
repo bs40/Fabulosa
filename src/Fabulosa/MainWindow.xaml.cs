@@ -125,6 +125,7 @@ namespace Fabulosa
                         File.WriteAllText(App.ScreenshotPath + ".stats.txt",
                             $"fps={_renderer.Fps:0.0}\nrender_ms={_renderer.LastRenderMs:0.00}\ncapture={_capture.Status} {_capture.DeviceName} {_capture.FormatDescription}\n" +
                             $"capture_mode={_capture.CaptureMode}\npacket_ms={_capture.PacketIntervalMs:0.0}\n" +
+                            $"youtube={(_state.ShowYouTube ? "on" : "off")} ready={_playerReady} message=\"{_renderer.ViewOf<UI.Views.YouTubeView>()?.Status}\"\n" +
                             $"peak_db={_analyzer.PeakDb:0.0}\nrms_db={_analyzer.RmsDb:0.0}\nvu_l={_analyzer.VuLeft:0.000}\nvu_r={_analyzer.VuRight:0.000}\nsignal={_analyzer.SignalPresent}\n" +
                             $"media={_media.Snapshot.HasSession} {_media.Snapshot.Title}\n" + BeatStats() + _renderer.ProfileReport());
                     }
