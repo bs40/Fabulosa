@@ -22,6 +22,11 @@ namespace Fabulosa.Model
         public float SpectrumReleaseDbPerSec { get; set; } = 42f;
         public bool MeshLines { get; set; } = true;
         public float DancerFramesPerBeat { get; set; } = 4f;
+        public float RadialTrailSeconds { get; set; } = 0.4f;
+        public bool RadialLines { get; set; }
+        public bool PerformanceMode { get; set; }
+        public bool ShowYouTube { get; set; }
+        public string YouTubeUrl { get; set; } = "";
         public string[] HiddenVisualisers { get; set; } = Array.Empty<string>();
     }
 
@@ -71,6 +76,11 @@ namespace Fabulosa.Model
             state.SpectrumReleaseDbPerSec = Math.Clamp(s.SpectrumReleaseDbPerSec, 10f, 200f);
             state.MeshLines = s.MeshLines;
             state.DancerFramesPerBeat = s.DancerFramesPerBeat is 1f or 2f or 4f or 8f ? s.DancerFramesPerBeat : 4f;
+            state.RadialTrailSeconds = Math.Clamp(s.RadialTrailSeconds, 0.08f, 1.1f);
+            state.RadialLines = s.RadialLines;
+            state.PerformanceMode = s.PerformanceMode;
+            state.ShowYouTube = s.ShowYouTube;
+            state.YouTubeUrl = s.YouTubeUrl ?? "";
             state.HiddenVisualisers.Clear();
             foreach (string name in s.HiddenVisualisers ?? Array.Empty<string>())
                 if (Enum.TryParse(name, out Visualiser v) && Enum.IsDefined(v)) state.HiddenVisualisers.Add(v);
@@ -86,6 +96,11 @@ namespace Fabulosa.Model
             s.SpectrumReleaseDbPerSec = state.SpectrumReleaseDbPerSec;
             s.MeshLines = state.MeshLines;
             s.DancerFramesPerBeat = state.DancerFramesPerBeat;
+            s.RadialTrailSeconds = state.RadialTrailSeconds;
+            s.RadialLines = state.RadialLines;
+            s.PerformanceMode = state.PerformanceMode;
+            s.ShowYouTube = state.ShowYouTube;
+            s.YouTubeUrl = state.YouTubeUrl;
             s.HiddenVisualisers = state.HiddenVisualisers.Select(v => v.ToString()).OrderBy(n => n, StringComparer.Ordinal).ToArray();
             return s;
         }

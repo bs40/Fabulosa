@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}#player{width:100%;height:100%}</style>
+</head><body><div id="player"></div>
+<script>
+  // Hosts YouTube's own IFrame player and tells Fabulosa what it is doing.
+  window.__state = "loading"; window.__error = "";
+  function report() {
+    if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage(JSON.stringify({ state: window.__state, error: window.__error }));
+  }
+  var params = new URLSearchParams(location.hash.slice(1));
+  var names = { "-1": "unstarted", "0": "ended", "1": "playing", "2": "paused", "3": "buffering", "5": "cued" };
+  window.onYouTubeIframeAPIReady = function () {
+    var vars = { autoplay: 1, rel: 0, modestbranding: 1, playsinline: 1, origin: location.origin };
+    if (params.get("list")) { vars.list = params.get("list"); if (!params.get("v")) vars.listType = "playlist"; }
+    var options = {
+      width: "100%", height: "100%", playerVars: vars,
+      events: {
+        onReady: function (e) { window.__state = "ready"; report(); e.target.playVideo(); },
+        onStateChange: function (e) { window.__state = names[String(e.data)] || String(e.data); report(); },
+        onError: function (e) { window.__error = String(e.data); report(); }
+      }
+    };
+    if (params.get("v")) options.videoId = params.get("v");
+    window.__player = new YT.Player("player", options);
+  };
+  var tag = document.createElement("script");
+  tag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+</script></body></html>

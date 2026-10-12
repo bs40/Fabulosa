@@ -42,6 +42,7 @@ namespace Fabulosa.UI
             _menus = new MenuSystem(BuildMenus());
 
             _views.Add(new NowPlayingView());
+            _views.Add(new YouTubeView());
             _views.Add(new SpectrumView());
             _views.Add(new LevelMetersView());
             _views.Add(new DancerView());
@@ -60,11 +61,14 @@ namespace Fabulosa.UI
         /// <summary>Shows the visualisers the user picked and lays them out; hidden ones neither draw nor take input.</summary>
         public void ArrangePanels()
         {
-            var placed = Layout.Arrange(Ctx.State.IsVisible);
+            bool youTube = Ctx.State.ShowYouTube, dancer = Ctx.State.IsVisible(Visualiser.Dancer);
+            var placed = Layout.Arrange(Ctx.State.IsVisible, youTube && !dancer);
             _visible.Clear();
             foreach (var view in _views)
             {
-                if (view.PanelId is Visualiser id)
+                if (view is NowPlayingView) { if (youTube) continue; }   // the player takes over its slot
+                else if (view is YouTubeView) { if (!youTube) continue; view.SetBounds(Layout.YouTubeSlot(dancer)); }
+                else if (view.PanelId is Visualiser id)
                 {
                     if (!placed.TryGetValue(id, out var bounds)) continue;
                     view.SetBounds(bounds);
@@ -78,6 +82,16 @@ namespace Fabulosa.UI
         public bool IsShown(Visualiser v) => _visible.Any(view => view.PanelId == v);
         public SKRect BoundsOf(Visualiser v) => _views.First(view => view.PanelId == v).Bounds;
         public T ViewOf<T>() where T : View => _views.OfType<T>().FirstOrDefault();
+
+        /// <summary>Where the embedded YouTube player must sit, in design coordinates, or null when it is not shown.</summary>
+        public SKRect? YouTubeScreen
+        {
+            get { foreach (var v in _visible) if (v is YouTubeView yt) return yt.Screen; return null; }
+        }
+
+        /// <summary>Maps a design rectangle onto the pixels of the surface being drawn into.</summary>
+        public SKRect ToSurface(SKRect design) =>
+            new SKRect(_offX + design.Left * _scale, _offY + design.Top * _scale, _offX + design.Right * _scale, _offY + design.Bottom * _scale);
 
         public void InvalidateStatic() => _staticDirty = true;
 
@@ -322,6 +336,9 @@ namespace Fabulosa.UI
                         Action = ctx => ShowVisualisers(ctx, !ctx.State.IsVisible(v), v),
                     }).ToList();
                     items.Add(MenuItem.Separator());
+                    items.Add(new MenuItem { Label = "YouTube Player", KeepOpen = true, Checked = ctx => ctx.State.ShowYouTube, Action = ToggleYouTube });
+                    items.Add(new MenuItem { Label = "YouTube: Set Video or Playlist…", Action = SetYouTubeLink });
+                    items.Add(MenuItem.Separator());
                     items.Add(new MenuItem { Label = "Show All", KeepOpen = true, Enabled = ctx => ctx.State.HiddenVisualisers.Count > 0, Action = ctx => ShowVisualisers(ctx, true, AppState.AllVisualisers) });
                     return items;
                 }},
@@ -346,12 +363,19 @@ namespace Fabulosa.UI
                     new MenuItem { Label = "Dancer: 4 frames per beat", Action = ctx => SetDancerRate(ctx, 4f), Checked = ctx => IsDancerRate(ctx, 4f) },
                     new MenuItem { Label = "Dancer: 8 frames per beat", Action = ctx => SetDancerRate(ctx, 8f), Checked = ctx => IsDancerRate(ctx, 8f) },
                     MenuItem.Separator(),
+                    new MenuItem { Label = "Radial: Filled", Action = ctx => SetRadialLines(ctx, false), Checked = ctx => !ctx.State.RadialLines },
+                    new MenuItem { Label = "Radial: Lines", Action = ctx => SetRadialLines(ctx, true), Checked = ctx => ctx.State.RadialLines },
+                    new MenuItem { Label = "Radial trail: Short", Action = ctx => SetRadialTrail(ctx, 0.4f), Checked = ctx => IsRadialTrail(ctx, 0.4f) },
+                    new MenuItem { Label = "Radial trail: Long", Action = ctx => SetRadialTrail(ctx, 1.1f), Checked = ctx => IsRadialTrail(ctx, 1.1f) },
+                    new MenuItem { Label = "Radial trail: Off", Action = ctx => SetRadialTrail(ctx, 0.08f), Checked = ctx => IsRadialTrail(ctx, 0.08f) },
+                    MenuItem.Separator(),
                     new MenuItem { Label = "Show Frame Rate", Action = ctx => ctx.State.ShowFps = !ctx.State.ShowFps, Checked = ctx => ctx.State.ShowFps },
                 }},
                 new Menu { Title = "Tools", Build = f => new List<MenuItem>
                 {
                     new MenuItem { Label = "Always on Top", Action = ctx => { ctx.State.AlwaysOnTop = !ctx.State.AlwaysOnTop; ctx.Host.SetTopmost(ctx.State.AlwaysOnTop); ctx.PersistSettings?.Invoke(); }, Checked = ctx => ctx.State.AlwaysOnTop },
                     new MenuItem { Label = "Reset Window Size (1:1)", Action = ctx => ctx.Host.ResetWindowSize() },
+                    new MenuItem { Label = "Performance Mode (draw at 1672 x 941 and scale up)", Action = TogglePerformanceMode, Checked = ctx => ctx.State.PerformanceMode },
                     MenuItem.Separator(),
                     new MenuItem { Label = "Save Screenshot…", Action = SaveScreenshot },
                     new MenuItem { Label = "Open Settings Folder", Action = ctx => { try { Process.Start(new ProcessStartInfo("explorer.exe", Storage.Folder) { UseShellExecute = true }); } catch { } } },
@@ -361,13 +385,14 @@ namespace Fabulosa.UI
                     new MenuItem { Label = "How It Works", Action = ctx => ctx.Host.ShowMessage("How Fabulosa works",
                         "Fabulosa listens to whatever Windows is playing (WASAPI loopback on the default output device) and visualises it.\n\n" +
                         "• Spectrum / 3D spectrum: 64 log-spaced bands, 20 Hz – 20 kHz. Click L+R to switch channels.\n" +
-                        "• Radial spectrum: a spoke per band, right channel down one side and left channel up the other, with the\n" +
-                        "  last second flowing outward as spikes. It pulses on the beat and turns slowly clockwise.\n" +
+                        "• Radial spectrum: a spoke per band, right channel down one side and left channel up the other. The newest\n" +
+                        "  spikes are worked out every frame and flow outward (Visualisation menu: filled or lines, trail length).\n" +
                         "• VU meters: 150 ms ballistics (twice classic VU speed), 0 VU = -14 dBFS.\n" +
                         "• Oscilloscope: 5 ms/div, rising-edge triggered. Phase scope: X = left, Y = right.\n" +
                         "• Dancer: a beat tracker follows the kick and snare, estimates the tempo and steps the figure\n" +
                         "  through its poses, four frames per beat (the Visualisation menu changes the rate).\n" +
-                        "• Now Playing and the transport buttons use the Windows media session of the app that is playing.\n\n" +
+                        "• Now Playing and the transport buttons use the Windows media session of the app that is playing.\n" +
+                        "• YouTube: the View menu can put YouTube's own player in the Now Playing slot; its sound drives every panel.\n\n" +
                         "The View menu picks which visualisers are shown; the choice is remembered.") },
                     new MenuItem { Label = "About Fabulosa", Action = ctx => ctx.Host.ShowMessage("Fabulosa", "Fabulosa v3.2\nMusic-reactive visualiser for Windows.") },
                 }},
@@ -378,6 +403,42 @@ namespace Fabulosa.UI
         {
             foreach (var v in which) ctx.State.SetVisible(v, visible);
             ctx.RearrangePanels?.Invoke();
+            ctx.PersistSettings?.Invoke();
+        }
+
+        private static void ToggleYouTube(FrameContext ctx)
+        {
+            ctx.State.ShowYouTube = !ctx.State.ShowYouTube;
+            ctx.RearrangePanels?.Invoke();
+            ctx.PersistSettings?.Invoke();
+        }
+
+        /// <summary>Asks for a link and keeps it only when it is a YouTube video or playlist.</summary>
+        private static void SetYouTubeLink(FrameContext ctx)
+        {
+            string entered = ctx.Host.PromptText("YouTube", "Video or playlist link:", ctx.State.YouTubeUrl);
+            if (entered == null) return;
+            entered = entered.Trim();
+            if (entered.Length > 0 && YouTubeView.PlayerQuery(entered) == null)
+            {
+                ctx.Host.ShowMessage("YouTube", "That does not look like a YouTube video or playlist link.");
+                return;
+            }
+            ctx.State.YouTubeUrl = entered;
+            if (entered.Length > 0) ctx.State.ShowYouTube = true;
+            ctx.RearrangePanels?.Invoke();
+            ctx.PersistSettings?.Invoke();
+            ctx.SetStatus?.Invoke(entered.Length > 0 ? "YouTube link set" : "YouTube link cleared");
+        }
+
+        private static void SetRadialLines(FrameContext ctx, bool lines) { ctx.State.RadialLines = lines; ctx.PersistSettings?.Invoke(); }
+        private static void SetRadialTrail(FrameContext ctx, float seconds) { ctx.State.RadialTrailSeconds = seconds; ctx.PersistSettings?.Invoke(); }
+        private static bool IsRadialTrail(FrameContext ctx, float seconds) => Math.Abs(ctx.State.RadialTrailSeconds - seconds) < 0.01f;
+
+        private static void TogglePerformanceMode(FrameContext ctx)
+        {
+            ctx.State.PerformanceMode = !ctx.State.PerformanceMode;
+            ctx.Host.SetPerformanceMode(ctx.State.PerformanceMode);
             ctx.PersistSettings?.Invoke();
         }
 

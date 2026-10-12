@@ -22,6 +22,21 @@ namespace Fabulosa.Model
         /// <summary>Sprite frames the dancer advances per detected beat.</summary>
         public float DancerFramesPerBeat { get; set; } = 4f;
 
+        /// <summary>How much of the radial trail is drawn, in seconds (0.4 = short, saved).</summary>
+        public float RadialTrailSeconds { get; set; } = 0.4f;
+
+        /// <summary>Draw the radial spikes as outlines instead of filled shapes (saved).</summary>
+        public bool RadialLines { get; set; }
+
+        /// <summary>Draw at the design size and let the graphics card scale it up: steadier on big screens (saved).</summary>
+        public bool PerformanceMode { get; set; }
+
+        /// <summary>Show the YouTube player in the Now Playing slot instead of the track details (saved).</summary>
+        public bool ShowYouTube { get; set; }
+
+        /// <summary>Video or playlist the YouTube panel plays (saved); empty until a link is set.</summary>
+        public string YouTubeUrl { get; set; } = "";
+
         public static readonly Visualiser[] AllVisualisers = Enum.GetValues<Visualiser>();
 
         public static string NameOf(Visualiser v) => v switch

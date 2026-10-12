@@ -36,6 +36,7 @@ namespace Fabulosa.UI.Views
         private readonly SKPath _spike = new SKPath();
         private readonly SKPaint _fill = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
         private readonly SKPaint _line = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.3f };
+        private readonly SKPaint _outline = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f, StrokeJoin = SKStrokeJoin.Bevel };
         private readonly SKPaint _edge = Theme.Stroke(new SKColor(0x2a, 0x34, 0x33, 190), 1f);
         private SKPaint _fade;
         private float _pulse;
@@ -92,11 +93,11 @@ namespace Fabulosa.UI.Views
             var beat = a.Beat;
             RotationDegrees = (RotationDegrees + DegreesPerSecond * f.Dt) % 360f;
 
-            // pulse on the beat; until a tempo is found, strong onsets pulse it instead
+            // every drum hit pulses it, with the beat clock keeping time between hits
             float target = beat.LastBeatTime >= 0 ? beat.Pulse : 0f;
-            if (!beat.HasTempo && beat.LastOnsetTime >= 0)
-                target = Math.Max(target, (float)Math.Exp(-(beat.Now - beat.LastOnsetTime) / 0.12) * Math.Clamp(beat.LastOnsetStrength / 6f, 0f, 1f));
-            _pulse += (target - _pulse) * (target > _pulse ? 0.6f : 0.15f);
+            if (beat.LastOnsetTime >= 0)
+                target = Math.Max(target, (float)Math.Exp(-(beat.Now - beat.LastOnsetTime) / 0.1) * Math.Clamp(beat.LastOnsetStrength / 5f, 0f, 1f));
+            _pulse += (target - _pulse) * (target > _pulse ? 0.85f : 0.12f);
 
             float radius = _radius * (1f + 0.035f * _pulse);
             float lift = SpikeHeight * radius * (1f + PulseLift * _pulse);
@@ -123,7 +124,9 @@ namespace Fabulosa.UI.Views
             }
             c.DrawRect(_screen, _fade);
 
-            int rows = Analyzer.RadialRows;
+            // a short trail keeps the eye on what is happening now; the ripples then travel out and die quickly
+            int rows = Math.Clamp((int)MathF.Round(f.State.RadialTrailSeconds / Analyzer.RadialRowSeconds), 2, Analyzer.RadialRows);
+            bool lines = f.State.RadialLines;
             float step = (HistoryEnd - HistoryStart) / (rows - 1);
             float phase = a.RadialPhase;
             foreach (int k in _order)
@@ -136,13 +139,21 @@ namespace Fabulosa.UI.Views
                 {
                     float age = (j + phase) / rows;   // spikes shrink as they travel outward
                     float r = Math.Min(HistoryEnd, HistoryStart + (j + phase) * step);
-                    float h = a.RadialHistory[(a.RadialHead + j) % rows][column] * lift * (1f - age);
+                    float h = a.RadialHistory[(a.RadialHead + j) % Analyzer.RadialRows][column] * lift * (1f - age);
                     _spike.LineTo(cx + dx * r, cy + dy * r - h);
                 }
-                _spike.LineTo(cx + dx * HistoryEnd, cy + dy * HistoryEnd);
-                _spike.Close();
-                _fill.Color = Theme.Lighten(_colours[k], 0.15f * _pulse).WithAlpha(245);
-                c.DrawPath(_spike, _fill);
+                if (lines)
+                {
+                    _outline.Color = Theme.Lighten(_colours[k], 0.2f * _pulse);
+                    c.DrawPath(_spike, _outline);
+                }
+                else
+                {
+                    _spike.LineTo(cx + dx * HistoryEnd, cy + dy * HistoryEnd);
+                    _spike.Close();
+                    _fill.Color = Theme.Lighten(_colours[k], 0.15f * _pulse).WithAlpha(245);
+                    c.DrawPath(_spike, _fill);
+                }
             }
             c.Restore();
             c.DrawRoundRect(_screen, 4, 4, _edge);

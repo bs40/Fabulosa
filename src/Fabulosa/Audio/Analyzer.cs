@@ -23,7 +23,7 @@ namespace Fabulosa.Audio
         public const float DisplayOffsetDb = 10f;
         /// <summary>0 VU reference in dBFS (sine). -14 dBFS suits streaming-normalised material.</summary>
         public const float VuReferenceDbfs = -14f;
-        private const float RadialRowSeconds = 0.04f;
+        public const float RadialRowSeconds = 0.04f;
         /// <summary>A short window for the radial view (46 ms at 44.1 kHz), about one row long, so successive rows stay independent and spikes stay sharp.</summary>
         private const int RadialFftSize = 2048;
 
@@ -207,24 +207,26 @@ namespace Fabulosa.Audio
             // --- radial spectrum: each channel's band heights, a new row every 40 ms ---
             if (RadialEnabled)
             {
+                // The newest row is worked out every frame, so the spikes at the inner edge are as live as the
+                // frame rate allows; every 40 ms that row freezes into the trail and a new one starts.
                 _radialClock += dt;
                 if (_radialClock >= RadialRowSeconds)
                 {
                     _radialClock = Math.Min(_radialClock - RadialRowSeconds, RadialRowSeconds);
                     RadialHead = (RadialHead + RadialRows - 1) % RadialRows;
-                    var row = RadialHistory[RadialHead];
-                    int start = need - RadialFftSize;
-                    float loudest = Math.Max(ChannelLevels(_left, start, sr, row, 0), ChannelLevels(_right, start, sr, row, BandCount));
-                    // gentle automatic gain: the loudest band of the last couple of seconds stands at full height
-                    _radialLoudest = Math.Max(loudest, _radialLoudest * 0.985f);
-                    float gain = 1f / Math.Max(_radialLoudest, 0.4f);
-                    for (int i = 0; i < row.Length; i++)
-                    {
-                        float t = Math.Min(1f, row[i] * gain);
-                        row[i] = t * t * t * t;   // to the fourth power: quiet bands lie flat and the loudest stand up as spikes
-                    }
                 }
                 RadialPhase = (float)Math.Clamp(_radialClock / RadialRowSeconds, 0.0, 1.0);
+                var row = RadialHistory[RadialHead];
+                int start = need - RadialFftSize;
+                float loudest = Math.Max(ChannelLevels(_left, start, sr, row, 0), ChannelLevels(_right, start, sr, row, BandCount));
+                // gentle automatic gain: the loudest band of the last second or two stands at full height
+                _radialLoudest = Math.Max(loudest, _radialLoudest * MathF.Exp(-dt / 1.5f));
+                float gain = 1f / Math.Max(_radialLoudest, 0.4f);
+                for (int i = 0; i < row.Length; i++)
+                {
+                    float t = Math.Min(1f, row[i] * gain);
+                    row[i] = t * t * t * t;   // to the fourth power: quiet bands lie flat and the loudest stand up as spikes
+                }
             }
 
             // --- waterfall history (new row every ~38 ms; 32 rows span ~1.2 s) ---

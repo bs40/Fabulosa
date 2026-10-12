@@ -36,10 +36,13 @@ namespace Fabulosa
         private bool _closing;
         private float _pendingDt = 1f / 60f;
         private Visualiser[] _selfTestHiddenBackup;
+        private bool _selfTestYouTube;
+        private bool _performanceMode;
 
         public MainWindow()
         {
             InitializeComponent();
+            InitYouTubeLayer();
             Theme.Init();
 
             _settings = Storage.LoadSettings();
@@ -72,6 +75,7 @@ namespace Fabulosa
             Loaded += OnLoaded;
             Closing += OnClosing;
             StateChanged += (s, e) => _renderer.InvalidateStatic();
+            SizeChanged += (s, e) => ApplySurfaceScale();
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -79,6 +83,7 @@ namespace Fabulosa
             _capture.Start();
             _analyzer.SampleRate = _capture.SampleRate;
             _media.Start();
+            SetPerformanceMode(_state.PerformanceMode);
             CompositionTarget.Rendering += OnRendering;
 
             if (!string.IsNullOrEmpty(App.SelfTestPath))
@@ -119,6 +124,7 @@ namespace Fabulosa
                         SaveScreenshot(App.ScreenshotPath);
                         File.WriteAllText(App.ScreenshotPath + ".stats.txt",
                             $"fps={_renderer.Fps:0.0}\nrender_ms={_renderer.LastRenderMs:0.00}\ncapture={_capture.Status} {_capture.DeviceName} {_capture.FormatDescription}\n" +
+                            $"capture_mode={_capture.CaptureMode}\npacket_ms={_capture.PacketIntervalMs:0.0}\n" +
                             $"peak_db={_analyzer.PeakDb:0.0}\nrms_db={_analyzer.RmsDb:0.0}\nvu_l={_analyzer.VuLeft:0.000}\nvu_r={_analyzer.VuRight:0.000}\nsignal={_analyzer.SignalPresent}\n" +
                             $"media={_media.Snapshot.HasSession} {_media.Snapshot.Title}\n" + BeatStats() + _renderer.ProfileReport());
                     }
@@ -148,6 +154,7 @@ namespace Fabulosa
             catch (Exception ex) { App.LogError(ex); }
             _pendingDt = dt;
             Surface.InvalidateVisual();
+            UpdateYouTubePlayer();
         }
 
         private void OnPaintSurface(object sender, SKPaintSurfaceEventArgs e)
@@ -220,6 +227,40 @@ namespace Fabulosa
             Width = Layout.Width / dpi.DpiScaleX;
             Height = Layout.Height / dpi.DpiScaleY;
             ClampToWorkArea();
+        }
+
+        /// <summary>
+        /// Performance mode draws at the design size and lets the graphics card stretch the result to the window,
+        /// so a large screen costs no more to draw than a small one; the picture is softer when the window is bigger.
+        /// </summary>
+        public void SetPerformanceMode(bool on)
+        {
+            _performanceMode = on;
+            if (on)
+            {
+                Surface.HorizontalAlignment = HorizontalAlignment.Left;
+                Surface.VerticalAlignment = VerticalAlignment.Top;
+                Surface.Width = Layout.Width;
+                Surface.Height = Layout.Height;
+                Surface.RenderTransformOrigin = new Point(0, 0);
+                ApplySurfaceScale();
+            }
+            else
+            {
+                Surface.HorizontalAlignment = HorizontalAlignment.Stretch;
+                Surface.VerticalAlignment = VerticalAlignment.Stretch;
+                Surface.Width = double.NaN;
+                Surface.Height = double.NaN;
+                Surface.RenderTransform = Transform.Identity;
+            }
+            _renderer.InvalidateStatic();
+        }
+
+        private void ApplySurfaceScale()
+        {
+            if (!_performanceMode) return;
+            double sx = Math.Max(0.1, Root.ActualWidth / Layout.Width), sy = Math.Max(0.1, Root.ActualHeight / Layout.Height);
+            Surface.RenderTransform = new ScaleTransform(sx, sy);
         }
 
         public string OpenFileDialog(string title, string filter)
@@ -309,6 +350,8 @@ namespace Fabulosa
             float initialRate = _state.DancerFramesPerBeat;
             // the test runs with every visualiser shown; the saved choice goes back when the live check ends
             _selfTestHiddenBackup = _state.HiddenVisualisers.ToArray();
+            _selfTestYouTube = _state.ShowYouTube;
+            _state.ShowYouTube = false;   // the layout checks below assume the Now Playing slot
             _state.HiddenVisualisers.Clear();
             _renderer.ArrangePanels();
             try
@@ -382,6 +425,23 @@ namespace Fabulosa
                 _state.HiddenVisualisers.Clear();
                 _renderer.ArrangePanels();
                 Check("layout pictures written", File.Exists($"{reportPath}.layout-radial-focus.png"));
+
+                // performance mode: draw at the design size and let the graphics card stretch it to the window
+                SetPerformanceMode(true);
+                Check("performance mode draws at the design size", Math.Abs(Surface.Width - Layout.Width) < 0.5 && Surface.RenderTransform is ScaleTransform);
+                SetPerformanceMode(false);
+                Check("turning it off gives the window back its full resolution", double.IsNaN(Surface.Width) && Surface.RenderTransform == Transform.Identity);
+
+                // YouTube links: what the panel accepts, and that nothing else is ever loaded
+                Check("a watch link is understood", UI.Views.YouTubeView.PlayerQuery("https://www.youtube.com/watch?v=M7lc1UVf-VE") == "v=M7lc1UVf-VE");
+                Check("a short link is understood", UI.Views.YouTubeView.PlayerQuery("https://youtu.be/M7lc1UVf-VE?t=30") == "v=M7lc1UVf-VE");
+                Check("a playlist link plays the playlist", UI.Views.YouTubeView.PlayerQuery("https://www.youtube.com/playlist?list=PL1234567890abcd") == "list=PL1234567890abcd");
+                Check("a video inside a playlist keeps both", UI.Views.YouTubeView.PlayerQuery("https://www.youtube.com/watch?v=M7lc1UVf-VE&list=PL1234567890abcd") == "v=M7lc1UVf-VE&list=PL1234567890abcd");
+                Check("a bare video id works", UI.Views.YouTubeView.PlayerQuery("M7lc1UVf-VE") == "v=M7lc1UVf-VE");
+                Check("anything else is refused", UI.Views.YouTubeView.PlayerQuery("https://example.com/watch?v=M7lc1UVf-VE") == null
+                    && UI.Views.YouTubeView.PlayerQuery("not a link") == null && UI.Views.YouTubeView.PlayerQuery("") == null);
+                Check("the player takes the Now Playing slot, and the column when the Dancer is hidden",
+                    Layout.YouTubeSlot(true) == Layout.NowPlaying && Layout.YouTubeSlot(false).Bottom == 850f && Layout.YouTubeSlot(false).Top == Layout.NowPlaying.Top);
 
                 bool drag = _renderer.MouseDown(new SKPoint(700, 30), 1);
                 _renderer.MouseUp(new SKPoint(700, 30));
@@ -616,6 +676,8 @@ namespace Fabulosa
                     float turned = (radial.RotationDegrees - startTurn + 360f) % 360f;
                     var report = new StringBuilder();
                     report.AppendLine($"bpm={beat.Bpm:0.0} locked={beat.Locked}");
+                    report.AppendLine($"{(_capture.PacketIntervalMs > 0 && _capture.PacketIntervalMs <= 25 ? "PASS" : "FAIL")} audio arrives every {_capture.PacketIntervalMs:0.0} ms ({_capture.CaptureMode})");
+                    report.AppendLine($"signal={_analyzer.SignalPresent} peak={_analyzer.PeakDb:0.0} dB rms={_analyzer.RmsDb:0.0} dB");
                     report.AppendLine($"{(Math.Abs(turned - 6 * span) < 6 ? "PASS" : "FAIL")} radial turned {turned:0.0} degrees clockwise in {span:0.0} s (a turn a minute is {6 * span:0.0})");
                     report.AppendLine($"{(strongestPulse > 0.5f ? "PASS" : "FAIL")} radial pulsed, strongest pulse {strongestPulse:0.00}");
                     if (clip)
@@ -641,6 +703,7 @@ namespace Fabulosa
                     _state.ResetClockClicks();
                     _state.HiddenVisualisers.Clear();
                     if (_selfTestHiddenBackup != null) _state.HiddenVisualisers.UnionWith(_selfTestHiddenBackup);
+                    _state.ShowYouTube = _selfTestYouTube;
                     _renderer.ArrangePanels();
                     Close();
                 }
@@ -712,6 +775,7 @@ namespace Fabulosa
             _closing = true;
             CompositionTarget.Rendering -= OnRendering;
             try { SaveSettingsNow(); } catch { }
+            DisposeYouTubePlayer();
             _media.Dispose();
             _capture.Dispose();
             _renderer.Dispose();

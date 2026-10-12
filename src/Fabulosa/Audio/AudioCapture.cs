@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using NAudio.CoreAudioApi;
 using NAudio.CoreAudioApi.Interfaces;
@@ -17,12 +18,14 @@ namespace Fabulosa.Audio
         private readonly MMDeviceEnumerator _enumerator = new MMDeviceEnumerator();
         private readonly NotificationClient _notifications;
         private readonly object _gate = new object();
-        private WasapiLoopbackCapture _capture;
+        private WasapiCapture _capture;
         private WasapiOut _silence;
         private MMDevice _device;
         private float[] _left = new float[8192];
         private float[] _right = new float[8192];
         private Timer _restartTimer;
+        private readonly Stopwatch _packetClock = Stopwatch.StartNew();
+        private double _lastPacket;
         private bool _disposed;
 
         public AudioCapture(StereoRingBuffer buffer)
@@ -62,21 +65,17 @@ namespace Fabulosa.Audio
                     _device = _enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
                     DeviceName = _device.FriendlyName;
 
-                    _capture = new WasapiLoopbackCapture(_device);
+                    _capture = StartCapture(_device);
                     var fmt = _capture.WaveFormat;
                     SampleRate = fmt.SampleRate;
                     Channels = fmt.Channels;
                     BitDepth = fmt.BitsPerSample;
                     IsFloat = IsFloatFormat(fmt);
-                    _capture.DataAvailable += OnDataAvailable;
-                    _capture.RecordingStopped += OnRecordingStopped;
 
                     // Keep the endpoint active so loopback keeps delivering (silent) packets.
                     _silence = new WasapiOut(_device, AudioClientShareMode.Shared, true, 200);
                     _silence.Init(new SilenceProvider(WaveFormat.CreateIeeeFloatWaveFormat(SampleRate, 2)));
                     _silence.Play();
-
-                    _capture.StartRecording();
                     IsRunning = true;
                     Status = "Listening";
                 }
@@ -89,6 +88,56 @@ namespace Fabulosa.Audio
                     ScheduleRestart(2000);
                 }
             }
+        }
+
+        /// <summary>How audio is being delivered, for the diagnostics in the stats file.</summary>
+        public string CaptureMode { get; private set; } = "";
+
+        /// <summary>Smoothed gap between audio packets: the floor under how soon anything on screen can react.</summary>
+        public float PacketIntervalMs { get; private set; }
+
+        /// <summary>Loopback capture with a short buffer that can be driven by the device's own event.</summary>
+        private sealed class LowLatencyLoopback : WasapiCapture
+        {
+            public LowLatencyLoopback(MMDevice device, bool eventSync, int bufferMs) : base(device, eventSync, bufferMs) { }
+            protected override AudioClientStreamFlags GetAudioClientStreamFlags() => AudioClientStreamFlags.Loopback | base.GetAudioClientStreamFlags();
+        }
+
+        /// <summary>
+        /// Starts the quickest delivery the device accepts. Event-driven capture hands over audio about every
+        /// 10 ms; NAudio's default polls at roughly 60 ms, which is enough to leave every panel behind the music.
+        /// </summary>
+        private WasapiCapture StartCapture(MMDevice device)
+        {
+            var attempts = new (string Mode, Func<WasapiCapture> Make)[]
+            {
+                ("event-driven, 20 ms buffer", () => new LowLatencyLoopback(device, true, 20)),
+                ("polled, 20 ms buffer", () => new LowLatencyLoopback(device, false, 20)),
+                ("NAudio default", () => new WasapiLoopbackCapture(device)),
+            };
+            Exception failure = null;
+            foreach (var attempt in attempts)
+            {
+                WasapiCapture capture = null;
+                try
+                {
+                    capture = attempt.Make();
+                    capture.DataAvailable += OnDataAvailable;
+                    capture.RecordingStopped += OnRecordingStopped;
+                    capture.StartRecording();
+                    CaptureMode = attempt.Mode;
+                    _lastPacket = 0;
+                    PacketIntervalMs = 0;
+                    return capture;
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                    System.Diagnostics.Debug.WriteLine($"capture mode \"{attempt.Mode}\" failed: {ex.Message}");
+                    try { capture?.Dispose(); } catch { }
+                }
+            }
+            throw failure ?? new InvalidOperationException("No loopback capture could be started");
         }
 
         private static readonly Guid IeeeFloatSubtype = new Guid("00000003-0000-0010-8000-00aa00389b71");
@@ -111,6 +160,10 @@ namespace Fabulosa.Audio
             if (frameBytes == 0) return;
             int frames = e.BytesRecorded / frameBytes;
             if (frames == 0) return;
+            double now = _packetClock.Elapsed.TotalMilliseconds;
+            if (_lastPacket > 0)
+                PacketIntervalMs = PacketIntervalMs <= 0 ? (float)(now - _lastPacket) : PacketIntervalMs + (float)(now - _lastPacket - PacketIntervalMs) * 0.05f;
+            _lastPacket = now;
             if (_left.Length < frames) { _left = new float[frames * 2]; _right = new float[frames * 2]; }
 
             byte[] buf = e.Buffer;

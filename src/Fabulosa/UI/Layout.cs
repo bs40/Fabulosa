@@ -23,6 +23,12 @@ namespace Fabulosa.UI
 
         public static readonly SKRect NowPlaying = new SKRect(16, 100, 318, 374);
 
+        /// <summary>
+        /// Where the YouTube player goes: the Now Playing slot, or the whole left column when the Dancer is hidden,
+        /// so hiding the Dancer gives the video a big panel.
+        /// </summary>
+        public static SKRect YouTubeSlot(bool dancerVisible) => dancerVisible ? NowPlaying : new SKRect(16, 100, 318, 850);
+
         public static readonly SKRect BottomBar = new SKRect(16, 858, 1656, 930);
         public static readonly SKRect ShuffleBox = new SKRect(740, 872, 938, 918);
         public static readonly SKRect RepeatBox = new SKRect(955, 872, 1133, 918);
@@ -54,9 +60,10 @@ namespace Fabulosa.UI
         /// <summary>
         /// Places the visible visualisers. Now Playing keeps the top-left corner and the Dancer the column below
         /// it. The first row with anything in it sits beside Now Playing; later rows share the space below and
-        /// reach the left edge when the Dancer is hidden. Rows and panels stretch into whatever hidden ones free up.
+        /// reach the left edge when the Dancer is hidden (unless the tall YouTube panel holds that column). Rows and
+        /// panels stretch into whatever hidden ones free up.
         /// </summary>
-        public static Dictionary<Visualiser, SKRect> Arrange(Func<Visualiser, bool> isVisible)
+        public static Dictionary<Visualiser, SKRect> Arrange(Func<Visualiser, bool> isVisible, bool youTubeColumn = false)
         {
             var placed = new Dictionary<Visualiser, SKRect>();
             bool dancer = isVisible(Visualiser.Dancer);
@@ -79,7 +86,7 @@ namespace Fabulosa.UI
             }
 
             PlaceRow(placed, rows[0].Panels, new SKRect(BesideNowPlaying, TopEdge, RightEdge, UpperBottom));
-            float left = dancer ? BesideDancer : LeftEdge;
+            float left = dancer ? BesideDancer : youTubeColumn ? BesideNowPlaying : LeftEdge;   // the tall YouTube panel keeps the left column
             float weights = rows.Skip(1).Sum(r => r.Height);
             float space = BottomEdge - LowerTop - Gap * (rows.Count - 2);
             float y = LowerTop;

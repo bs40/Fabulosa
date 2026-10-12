@@ -15,6 +15,7 @@ namespace Fabulosa.UI
         void CloseWindow();
         void SetTopmost(bool on);
         void ResetWindowSize();
+        void SetPerformanceMode(bool on);
         bool IsMaximized { get; }
         string OpenFileDialog(string title, string filter);
         string SaveFileDialog(string title, string filter, string defaultName);
