@@ -17,7 +17,6 @@
     <Product>Fabulosa</Product>
     <Description>Music-reactive visualiser for Windows</Description>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <TieredPGO>true</TieredPGO>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- keep the publish folder to the exe itself: no XML docs from packages -->

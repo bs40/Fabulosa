@@ -292,9 +292,22 @@ namespace Fabulosa
 
         public string PromptText(string title, string prompt, string initial)
         {
+            var dialog = BuildPrompt(title, prompt, initial);
+            dialog.Window.Owner = this;
+            dialog.Box.Focus();
+            return dialog.Window.ShowDialog() == true ? dialog.Box.Text : null;
+        }
+
+        /// <summary>
+        /// Builds the little text dialog, separately from showing it so the self-test can build one without a
+        /// modal. These are ordinary WPF controls: they ask for the machine's culture, which globalization-invariant
+        /// mode refuses outright (it threw "2057 is an invalid culture identifier" on an en-GB machine).
+        /// </summary>
+        private static (Window Window, TextBox Box) BuildPrompt(string title, string prompt, string initial)
+        {
             var dlg = new Window
             {
-                Title = title, Owner = this, Width = 360, Height = 150, ResizeMode = ResizeMode.NoResize,
+                Title = title, Width = 360, Height = 150, ResizeMode = ResizeMode.NoResize,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner, Background = new SolidColorBrush(Color.FromRgb(0x14, 0x1a, 0x1b)),
                 WindowStyle = WindowStyle.ToolWindow,
             };
@@ -310,8 +323,7 @@ namespace Fabulosa
             buttons.Children.Add(ok); buttons.Children.Add(cancel);
             panel.Children.Add(buttons);
             dlg.Content = panel;
-            box.Focus();
-            return dlg.ShowDialog() == true ? box.Text : null;
+            return (dlg, box);
         }
 
         /// <summary>Renders the live WPF visual tree (i.e. what the SKElement actually painted) to a PNG.</summary>
@@ -329,6 +341,10 @@ namespace Fabulosa
 
         // ---- self test (drives the renderer's hit-testing in design coordinates) ---------------
 
+
+        /// <summary>Windows' own locale: readable even in globalization-invariant mode, where .NET reports none.</summary>
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        private static extern uint GetUserDefaultLCID();
         private void RunSelfTest(string reportPath)
         {
             var sb = new StringBuilder();
@@ -431,6 +447,16 @@ namespace Fabulosa
                 Check("performance mode draws at the design size", Math.Abs(Surface.Width - Layout.Width) < 0.5 && Surface.RenderTransform is ScaleTransform);
                 SetPerformanceMode(false);
                 Check("turning it off gives the window back its full resolution", double.IsNaN(Surface.Width) && Surface.RenderTransform == Transform.Identity);
+
+                // the YouTube link dialog is made of ordinary WPF controls, which need the machine's culture
+                var prompt = BuildPrompt("YouTube", "Video or playlist link:", "test");
+                Check("the link dialog can be built in this machine's culture", prompt.Window != null && prompt.Box.Text == "test");
+                int osLcid = (int)GetUserDefaultLCID();   // what Windows really uses, even when .NET is in invariant mode
+                bool cultureUsable = true;
+                try { _ = System.Globalization.CultureInfo.GetCultureInfo(osLcid); }
+                catch (Exception ex) { cultureUsable = false; sb.AppendLine($"  culture {osLcid} refused: {ex.Message}"); }
+                Check($"the machine's own culture ({osLcid}) can be used - pasting a link into a dialog needs it", cultureUsable);
+                prompt.Window.Close();
 
                 // YouTube links: what the panel accepts, and that nothing else is ever loaded
                 Check("a watch link is understood", UI.Views.YouTubeView.PlayerQuery("https://www.youtube.com/watch?v=M7lc1UVf-VE") == "v=M7lc1UVf-VE");
