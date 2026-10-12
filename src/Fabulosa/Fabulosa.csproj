@@ -20,6 +20,8 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <TieredPGO>true</TieredPGO>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- keep the publish folder to the exe itself: no XML docs from packages -->
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
 
   <ItemGroup>

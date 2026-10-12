@@ -519,6 +519,7 @@ namespace Fabulosa
                 _state.SpectrumChannel = initialChannel;
                 _state.PeakHoldEnabled = initialPeakHold;
                 _state.DancerFramesPerBeat = initialRate;
+                _state.ShowYouTube = _selfTestYouTube;   // the live check runs with the panel the user chose
                 _state.ResetClockClicks();
             }
             sb.AppendLine($"{pass} passed, {fail} failed");
@@ -678,6 +679,7 @@ namespace Fabulosa
                     report.AppendLine($"bpm={beat.Bpm:0.0} locked={beat.Locked}");
                     report.AppendLine($"{(_capture.PacketIntervalMs > 0 && _capture.PacketIntervalMs <= 25 ? "PASS" : "FAIL")} audio arrives every {_capture.PacketIntervalMs:0.0} ms ({_capture.CaptureMode})");
                     report.AppendLine($"signal={_analyzer.SignalPresent} peak={_analyzer.PeakDb:0.0} dB rms={_analyzer.RmsDb:0.0} dB");
+                    report.AppendLine($"youtube panel={(_state.ShowYouTube ? "on" : "off")} playerReady={_playerReady} message=\"{_renderer.ViewOf<UI.Views.YouTubeView>()?.Status}\"");
                     report.AppendLine($"{(Math.Abs(turned - 6 * span) < 6 ? "PASS" : "FAIL")} radial turned {turned:0.0} degrees clockwise in {span:0.0} s (a turn a minute is {6 * span:0.0})");
                     report.AppendLine($"{(strongestPulse > 0.5f ? "PASS" : "FAIL")} radial pulsed, strongest pulse {strongestPulse:0.00}");
                     if (clip)
@@ -703,7 +705,6 @@ namespace Fabulosa
                     _state.ResetClockClicks();
                     _state.HiddenVisualisers.Clear();
                     if (_selfTestHiddenBackup != null) _state.HiddenVisualisers.UnionWith(_selfTestHiddenBackup);
-                    _state.ShowYouTube = _selfTestYouTube;
                     _renderer.ArrangePanels();
                     Close();
                 }
